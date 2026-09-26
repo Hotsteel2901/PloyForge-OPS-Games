@@ -1,0 +1,18 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Render artifacts (visual QA screenshots)
+shots/
+
+# Blind test package is kept in git (docs/blind_test)
+
+# Build outputs
+/build/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.log

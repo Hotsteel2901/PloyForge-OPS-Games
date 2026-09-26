@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f2530"/>
+      <stop offset="1" stop-color="#12151c"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff9e5e"/>
+      <stop offset="1" stop-color="#ff6b2c"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded background -->
+  <rect width="128" height="128" rx="22" fill="url(#bg)"/>
+  <!-- outer subtle ring -->
+  <rect x="6" y="6" width="116" height="116" rx="18" fill="none" stroke="#2a3140" stroke-width="3"/>
+  <!-- crosshair arms -->
+  <g stroke="url(#accent)" stroke-width="5" stroke-linecap="round">
+    <line x1="64" y1="24" x2="64" y2="50"/>
+    <line x1="64" y1="78" x2="64" y2="104"/>
+    <line x1="24" y1="64" x2="50" y2="64"/>
+    <line x1="78" y1="64" x2="104" y2="64"/>
+  </g>
+  <!-- center dot -->
+  <circle cx="64" cy="64" r="9" fill="url(#accent)"/>
+  <circle cx="64" cy="64" r="4" fill="#12151c"/>
+  <!-- corner brackets -->
+  <g stroke="#ff8b3d" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.6">
+    <path d="M32 32 L44 32 L44 44"/>
+    <path d="M96 32 L84 32 L84 44"/>
+    <path d="M32 96 L44 96 L44 84"/>
+    <path d="M96 96 L84 96 L84 84"/>
+  </g>
+</svg>

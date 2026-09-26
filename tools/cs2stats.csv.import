@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://cb82thqalkbwa"
+
+[deps]
+
+files=["res://tools/cs2stats.0.294.translation", "res://tools/cs2stats.0.038.translation", "res://tools/cs2stats.0.621.translation", "res://tools/cs2stats.0.277.translation", "res://tools/cs2stats.3071.translation", "res://tools/cs2stats.49.translation", "res://tools/cs2stats.0.368.translation", "res://tools/cs2stats.0.278.translation"]
+
+source_file="res://tools/cs2stats.csv"
+dest_files=["res://tools/cs2stats.0.294.translation", "res://tools/cs2stats.0.038.translation", "res://tools/cs2stats.0.621.translation", "res://tools/cs2stats.0.277.translation", "res://tools/cs2stats.3071.translation", "res://tools/cs2stats.49.translation", "res://tools/cs2stats.0.368.translation", "res://tools/cs2stats.0.278.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

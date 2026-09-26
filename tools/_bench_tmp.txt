@@ -1,0 +1,11 @@
+BENCH START
+get_image 1024 seamless: 84 ms
+data size: 1048576
+packed loop 1M x3 stores: 79 ms
+create_from_data: 0 ms
+resize in-place 1024->512: 2 ms
+ImageTexture create: 0 ms
+material wiring: 0 ms
+get+set 512 loop (262K): 11 ms
+packed byte loop 512 (262K x4): 18 ms
+DONE

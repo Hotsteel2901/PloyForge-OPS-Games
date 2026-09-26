@@ -1,0 +1,46 @@
+PolyForge: Ops
+Copyright 2026 The PolyForge: Ops Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------
+THIRD-PARTY NOTICES
+--------------------------------------------------------------------------
+
+This project includes or depends on the following third-party components and
+assets. Each remains under its own license; the Apache License, Version 2.0
+does not apply to them.
+
+1. Godot AI (addons/godot_ai)
+   License: MIT
+   Copyright (c) 2025 Godot AI contributors
+   Files: addons/godot_ai/LICENSE, godot-ai-LICENSE.txt
+
+2. 3D character / weapon models by @Quaternius
+   License: CC0 1.0 Universal (Public Domain Dedication)
+   https://creativecommons.org/publicdomain/zero/1.0/
+   https://www.patreon.com/quaternius
+   See License.txt
+
+3. PBR textures from ambientCG
+   License: CC0 1.0 Universal
+   https://ambientcg.com/
+   Files: assets/textures/*
+
+4. HDRI environment map from Poly Haven
+   License: CC0 1.0 Universal
+   https://polyhaven.com/
+   Files: assets/hdri/sky_2k.hdr
+
+5. Footstep sound effects (Fantozzi series)
+   License: CC0 1.0 Universal (see source pack for details)
+   Files: assets/sfx/footsteps/*
+
+6. Noto Sans SC font
+   License: SIL Open Font License, Version 1.1
+   https://fonts.google.com/noto/specimen/Noto+Sans+SC
+   Files: assets/fonts/NotoSansSC-Subset.ttf
+
+7. Godot Engine (runtime dependency, not bundled)
+   License: MIT
+   https://godotengine.org/license
