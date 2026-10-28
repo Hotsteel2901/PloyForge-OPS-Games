@@ -22,6 +22,20 @@ var _enabled: bool = false
 var _locked: bool = false
 var _sdx: float = 0.0
 var _sdy: float = 0.0
+## 触屏/手柄：按住即显示记分板
+var force_scoreboard: bool = false
+## 辅助瞄准强度（0..1），触屏与手柄生效
+var aim_assist: float = 0.0
+
+
+## 外部（触屏摇杆 / 陀螺仪 / 手柄右摇杆）注入视角增量，单位：弧度
+func aim_delta(dyaw: float, dpitch: float) -> void:
+	if not _enabled:
+		return
+	_yaw += dyaw
+	_pitch = clampf(_pitch + dpitch, -PITCH_LIMIT, PITCH_LIMIT)
+	input.yaw = _yaw
+	input.pitch = _pitch
 
 
 func _ready() -> void:
@@ -52,6 +66,14 @@ func lock_pointer() -> void:
 func unlock_pointer() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_locked = false
+
+
+## 后坐力反冲：直接叠加到视角（视觉与瞄准同步，符合 FPS 惯例）
+func recoil(dyaw: float, dpitch: float) -> void:
+	_yaw += dyaw
+	_pitch = clampf(_pitch + dpitch, -PITCH_LIMIT, PITCH_LIMIT)
+	input.yaw = _yaw
+	input.pitch = _pitch
 
 
 func set_yaw_pitch(yaw: float, pitch: float) -> void:

@@ -21,8 +21,11 @@ var _scoreboard: Scoreboard
 var _main_menu: MainMenu
 var _pause_menu: PauseMenu
 var _debug_overlay: DebugOverlay
+var _touch: TouchControls = null
+var _net_panel: NetPanel = null
 
 var _room: Room = null
+var _net_client_mode: bool = false
 var _local_id: String = ""
 var _running: bool = false
 var _paused: bool = false
@@ -78,6 +81,13 @@ var _menu_chars: Array = []
 var _buy_menu_delay: float = -1.0
 var _base_fov: float = DEFAULT_FOV
 var _settings_volume: float = 1.0
+var _pf: int = 0
+var _auto_quit_at: float = 0.0
+var _auto_net_host: int = 0
+var _auto_net_join: String = ""
+var _auto_net_relay: String = ""
+var _auto_net_room: String = ""
+var _elapsed: float = 0.0
 
 
 func _ready() -> void:
@@ -114,6 +124,8 @@ func _ready() -> void:
 	_hud = HUD.new()
 	_hud.name = "HUD"
 	add_child(_hud)
+	if Platform.is_mobile or Platform.is_web:
+		_hud.apply_ui_scale(clampf(Platform.ui_scale() * Settings.get_float("graphics", "hud_scale"), 0.75, 1.6))
 	_buy_menu = BuyMenu.new()
 	_buy_menu.name = "BuyMenu"
 	add_child(_buy_menu)
@@ -130,12 +142,34 @@ func _ready() -> void:
 	_debug_overlay.name = "DebugOverlay"
 	_debug_overlay.setup(self)
 	add_child(_debug_overlay)
+	# 画质与设置
+	Platform.apply_quality(Settings.get_int("graphics", "quality"), get_viewport())
+	if Settings.get_bool("graphics", "auto_scale"):
+		Perf.auto_scale = true
+	Perf.target_fps = 60 if (Platform.is_mobile or Platform.is_web) else int(clampf(Platform.refresh_hz, 30.0, 165.0))
+	# 触屏虚拟手柄
+	if Platform.wants_touch_ui():
+		_touch = TouchControls.new()
+		_touch.name = "TouchControls"
+		_touch.z_index = 100
+		add_child(_touch)
+		_touch.setup(_input_handler)
+		_touch.refresh_from_settings()
+		_touch.pause_pressed.connect(func(): _toggle_pause(not _paused))
+		_display_hint_touch()
 	_pause_menu.resume_requested.connect(func(): _toggle_pause(false))
 	_pause_menu.menu_requested.connect(_on_menu_requested)
 	_pause_menu.quit_requested.connect(func(): get_tree().quit())
 	_main_menu.start_requested.connect(_on_start_game)
 	_main_menu.quit_requested.connect(func(): get_tree().quit())
 	_main_menu.settings_changed.connect(_on_settings_changed)
+	_main_menu.net_requested.connect(_on_net_requested)
+	_net_panel = NetPanel.new()
+	_net_panel.name = "NetPanel"
+	_net_panel.z_index = 90
+	add_child(_net_panel)
+	_net_panel.start_host.connect(func(opts: Dictionary): _net_panel.close(); _on_start_game(opts))
+	_net_panel.start_join.connect(func(_t: String, opts: Dictionary): _net_panel.close(); _on_start_game(opts))
 	_apply_settings(_main_menu.get_settings())
 	_buy_menu.buy.connect(_on_buy)
 	_buy_menu.refund.connect(_on_refund)
@@ -143,6 +177,11 @@ func _ready() -> void:
 	_main_menu.show_menu()
 	_input_handler.set_enabled(false)
 	_build_menu_backdrop()
+	Bus.net_disconnected.connect(func(reason: String) -> void:
+		if _running:
+			_hud.show_message("网络断开：" + reason, 4.0)
+			_on_menu_requested()
+	)
 	# CLI autostart for automated testing / screenshots:
 	# --autostart[=map_id]  --mode=defusal|zombie  --bots=N  --team=ct|t|random  --name=X
 	var args: PackedStringArray = OS.get_cmdline_user_args()
@@ -192,6 +231,27 @@ func _ready() -> void:
 			_no_taa = true
 		elif a == "--nohud":
 			_hide_ui_for_shot = true
+		elif a.begins_with("--seconds="):
+			_auto_quit_at = float(a.get_slice("=", 1))
+		elif a.begins_with("--net-host="):
+			_auto_net_host = int(a.get_slice("=", 1))
+		elif a.begins_with("--net-join="):
+			_auto_net_join = a.get_slice("=", 1)
+		elif a.begins_with("--relay="):
+			_auto_net_relay = a.get_slice("=", 1)
+		elif a.begins_with("--room="):
+			_auto_net_room = a.get_slice("=", 1)
+	if _auto_net_host > 0 or _auto_net_join != "":
+		call_deferred("_auto_net_start")
+
+
+## 统一状态取用：单机取本地 Room，联机取 Net 的活动状态。
+func _st() -> Dictionary:
+	if _room != null:
+		return _room.state
+	if Net.is_online():
+		return Net.active_state()
+	return {}
 
 
 func _autostart_match(opts: Dictionary) -> void:
@@ -258,40 +318,85 @@ func _on_start_game(opts: Dictionary) -> void:
 		stage.queue_free()
 	_menu_chars.clear()
 	_world.clear_map()
-	_room = Room.new({
-		"id": "local",
-		"mode": opts.mode,
-		"mapId": opts.mapId,
-		"botCount": int(opts.get("botCount", 8)),
-		"maxPlayers": Constants.MAX_PLAYERS,
-		"localOnly": true,
-	})
-	_room.events["player_damage"] = _on_player_damage
-	_room.events["player_death"] = _on_player_death
-	# 爆炸特效统一走 "explosion" 广播消息（room 不再双发 events.explosion）
-	_room.events["tick"] = func(_args: Dictionary) -> void: pass
-	var local_p: Dictionary = _room.add_local_player(str(opts.get("playerName", "Player1")), str(opts.get("teamPref", "random")))
-	_local_id = str(local_p.id)
+	_net_client_mode = false
+	var local_p: Dictionary = {}
+	if Net.status == Net.Status.HOST and Net.server != null and Net.server.room != null:
+		# 联机：自己是 Listen Server，直接复用 NetServer 的 Room
+		_room = Net.server.room
+		_local_id = Net.server.host_player_id
+		local_p = _room.state.players.get(_local_id, {})
+		_room.events["player_damage"] = _on_player_damage
+		_room.events["player_death"] = _on_player_death
+	elif Net.status == Net.Status.CLIENT:
+		# 联机：纯客户端，无本地 Room
+		_room = null
+		_net_client_mode = true
+		_local_id = Net.local_id()
+	else:
+		_room = Room.new({
+			"id": "local",
+			"mode": str(opts.get("mode", "defusal")),
+			"mapId": str(opts.get("mapId", "cinder")),
+			"botCount": int(opts.get("botCount", 8)),
+			"maxPlayers": Constants.MAX_PLAYERS,
+			"localOnly": true,
+		})
+		_room.events["player_damage"] = _on_player_damage
+		_room.events["player_death"] = _on_player_death
+		_room.events["tick"] = func(_args: Dictionary) -> void: pass
+		local_p = _room.add_local_player(str(opts.get("playerName", "Player1")), str(opts.get("teamPref", "random")))
+		_local_id = str(local_p.id)
+		_room.start()
+		_room.spawn_joiner(local_p)
 	_world.local_player_id = _local_id
-	_room.start()
-	_room.spawn_joiner(local_p)
-	if _give_weapon != "" and WeaponData.BUILTIN_WEAPONS.has(_give_weapon):
-		var gdef: Dictionary = WeaponData.BUILTIN_WEAPONS[_give_weapon]
-		local_p.weapons[int(gdef.get("slot", 2))] = WeaponData.WeaponRuntime.new(gdef)
-		local_p.activeSlot = int(gdef.get("slot", 2))
-	_input_handler.set_yaw_pitch(float(local_p.yaw), float(local_p.pitch))
+	if _give_weapon != "" and not local_p.is_empty():
+		var gdef: Dictionary = WeaponDB.get_def(_give_weapon)
+		if gdef.is_empty():
+			gdef = WeaponData.BUILTIN_WEAPONS.get(_give_weapon, {})
+		if not gdef.is_empty():
+			local_p.weapons[int(gdef.get("slot", 2))] = WeaponData.WeaponRuntime.new(gdef)
+			local_p.activeSlot = int(gdef.get("slot", 2))
+	if not local_p.is_empty():
+		_input_handler.set_yaw_pitch(float(local_p.yaw), float(local_p.pitch))
 	if is_finite(_yaw_override):
 		# 调试/截图：覆盖玩家初始朝向（--yaw=弧度）
 		_input_handler.set_yaw_pitch(_yaw_override, 0.0)
 	_camera.current = true
 	_input_handler.set_enabled(true)
-	_input_handler.lock_pointer()
+	if _touch != null:
+		_touch.set_active(true)
+		_touch.refresh_from_settings()
+	if not Platform.wants_touch_ui():
+		_input_handler.lock_pointer()
 	_running = true
 	_paused = false
 	_tick_accum = 0.0
-	_world.build_map(_room.state.map, _room.state.mapId)
+	_world.build_map(_st().map, _st().mapId)
 	_hud.show_message("比赛开始", 2.0)
 	_sfx.round_start()
+
+
+func _report_and_quit() -> void:
+	var st: Dictionary = _st()
+	print("[SELFTEST] elapsed=%.1fs mode=%s map=%s players=%d phase=%s round=%d score=%s" % [
+		_elapsed, str(st.get("mode", "")), str(st.get("mapId", "")),
+		st.get("players", {}).size(), str(st.get("phase", "")), int(st.get("roundNum", 0)), str(st.get("matchScore", {})),
+	])
+	for p in st.get("players", {}).values():
+		print("  %s team=%d alive=%s hp=%d k=%d d=%d pos=%s" % [
+			str(p.get("name", "")), int(p.get("team", 0)), str(p.get("alive", false)),
+			int(p.get("hp", 0)), int(p.get("kills", 0)), int(p.get("deaths", 0)), str(p.get("pos", Vector3.ZERO)),
+		])
+	print("[SELFTEST] fps_avg=%.1f" % Perf.fps)
+	var rep: String = "mode=%s map=%s players=%d phase=%s round=%d score=%s" % [
+		str(st.get("mode", "")), str(st.get("mapId", "")), st.get("players", {}).size(),
+		str(st.get("phase", "")), int(st.get("roundNum", 0)), str(st.get("matchScore", {})),
+	]
+	var fa := FileAccess.open("user://selftest.txt", FileAccess.WRITE)
+	if fa != null:
+		fa.store_line(rep)
+		fa.close()
+	get_tree().quit()
 
 
 func _exit_tree() -> void:
@@ -300,6 +405,10 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	_elapsed += delta
+	if _auto_quit_at > 0.0 and _elapsed >= _auto_quit_at:
+		_auto_quit_at = 0.0
+		_report_and_quit()
 	_adapt_web_scale(delta)
 	if _auto_reload_at > 0 and Engine.get_frames_drawn() >= _auto_reload_at:
 		_auto_reload_at = 0
@@ -374,7 +483,7 @@ func _capture_shot() -> void:
 	img.save_png(path)
 	var dbg: Dictionary = {}
 	if _room != null and _local_id != "":
-		var pl: Dictionary = _room.state.players
+		var pl: Dictionary = _st().players
 		var lp: Dictionary = pl.get(_local_id, {})
 		if not lp.is_empty():
 			dbg["pos"] = lp.pos
@@ -382,8 +491,8 @@ func _capture_shot() -> void:
 			dbg["team"] = lp.team
 			dbg["yaw"] = lp.yaw
 			dbg["pitch"] = lp.pitch
-			dbg["phase"] = _room.state.phase
-			dbg["round"] = _room.state.roundNum
+			dbg["phase"] = _st().phase
+			dbg["round"] = _st().roundNum
 	dbg["cam"] = _camera.global_position
 	dbg["fov"] = _camera.fov
 	dbg["fps"] = Engine.get_frames_per_second()
@@ -394,9 +503,23 @@ func _capture_shot() -> void:
 
 
 func _step_sim() -> void:
+	if _net_client_mode:
+		# 纯客户端：上行输入，下行事件，不做本地 tick
+		var snap: Dictionary = {}
+		_input_handler.snapshot_to(snap)
+		snap["sw"] = _input_handler.edge.sw
+		snap["swd"] = _input_handler.edge.swd
+		snap["j"] = _input_handler.edge.j or snap.get("j", false)
+		snap["r"] = _input_handler.edge.r or snap.get("r", false)
+		snap["u"] = _input_handler.edge.u or snap.get("u", false)
+		Net.apply_local_input(snap)
+		_input_handler.clear_edges()
+		for msg in Net.drain_events():
+			_handle_message(msg)
+		return
 	if _room == null:
 		return
-	var players_dict: Dictionary = _room.state.players
+	var players_dict: Dictionary = _st().players
 	var local: Dictionary = players_dict.get(_local_id, {})
 	if not local.is_empty():
 		_input_handler.snapshot_to(local.input)
@@ -464,7 +587,7 @@ func _handle_message(msg: Dictionary) -> void:
 			# 精细换弹：记录开始时刻与时长，由 _update_viewmodel 按进度驱动弹夹动画/分步音效
 			var wdef: Dictionary = {}
 			if _room != null:
-				var lp: Dictionary = _room.state.players.get(_local_id, {})
+				var lp: Dictionary = _st().players.get(_local_id, {})
 				if not lp.is_empty() and lp.weapons.has(int(lp.activeSlot)) and lp.weapons[int(lp.activeSlot)] != null:
 					wdef = lp.weapons[int(lp.activeSlot)].def
 			_reload_t = Time.get_ticks_msec() / 1000.0
@@ -562,15 +685,50 @@ func _handle_message(msg: Dictionary) -> void:
 			if not _buy_menu.is_open():
 				_buy_menu_delay = 2.2 if _shot_at <= 0 else -1.0
 		"map_change":
-			_world.build_map(_room.state.map, _room.state.mapId)
+			_world.build_map(_st().map, _st().mapId)
 			_world.clear_effects()
-			var map_data: Dictionary = _room.state.map
+			var map_data: Dictionary = _st().map
 			_hud.show_message("换图: %s" % str(map_data.get("name", "")), 2.5)
 		"finale_start":
 			_hud.show_message("琉璃决战开始!", 5.0)
 		"zombie_boost_visual":
 			if str(msg.get("id", "")) == _local_id:
 				_sfx.boost()
+		"chat":
+			_hud.show_message("[%s] %s" % [str(msg.get("from", "")), str(msg.get("text", ""))], 5.0)
+		"flashed":
+			var dur: float = float(msg.get("dur", 1.0))
+			_hud.flash_screen(dur)
+			_sfx.tick_sfx()
+		"smoke_pop":
+			_world.effects.smoke(Vector3(msg.pos.x, msg.pos.y, msg.pos.z), Color(0.78, 0.80, 0.84))
+		"fire_pop":
+			_world.effects.explosion(Vector3(msg.pos.x, msg.pos.y, msg.pos.z), 3.0)
+			_sfx.explosion()
+		"flash_pop":
+			_world.on_muzzle_flash(Vector3(msg.pos.x, msg.pos.y + 0.4, msg.pos.z), Vector3.UP)
+		"decoy_pop":
+			_sfx.click()
+		"decoy_sound":
+			if _camera != null:
+				_sfx.play_shot_at("rifle", Vector3(msg.pos.x, msg.pos.y, msg.pos.z), _camera.global_position)
+		"flag_taken":
+			_hud.show_message("旗帜被夺走！", 1.6)
+		"flag_returned":
+			_hud.show_message("旗帜已归还", 1.4)
+		"flag_captured":
+			_hud.show_message("旗帜已夺回基地！", 2.0)
+			_sfx.kill()
+		"wave_clear":
+			_hud.show_banner("第 %d 波 清除" % int(msg.get("wave", 0)), true)
+			_sfx.round_end(true)
+		"net_join":
+			_hud.show_message("%s 加入了战斗" % str(msg.get("name", "")), 2.0)
+		"net_leave":
+			_hud.show_message("玩家离开", 1.5)
+		"buy_fail":
+			_sfx.empty()
+			_hud.show_message("购买失败：%s" % str(msg.get("reason", "")), 1.5)
 		"state":
 			pass
 		"switch":
@@ -587,17 +745,26 @@ func _weapon_label(wid: String) -> String:
 
 
 func _round_win(winner: String) -> bool:
-	if _room == null:
+	var st: Dictionary = _st()
+	if st.is_empty():
 		return false
-	var players_dict: Dictionary = _room.state.players
-	var local: Dictionary = players_dict.get(_local_id, {})
+	var local: Dictionary = st.players.get(_local_id, {})
 	if local.is_empty():
 		return false
-	if _room.state.mode == Constants.MODE_DEFUSAL:
-		return (local.team == Constants.TEAM_CT) == (winner == "CT")
 	if winner == "DRAW":
 		return true
-	return (local.isZombie) == (winner == "ZOMBIE")
+	if not bool(st.get("team_based", true)):
+		return true
+	match winner:
+		"CT":
+			return int(local.team) == Constants.TEAM_CT
+		"T":
+			return int(local.team) == Constants.TEAM_T
+		"HUMAN":
+			return not bool(local.isZombie)
+		"ZOMBIE":
+			return bool(local.isZombie)
+	return false
 
 
 # 胜负播报文案：胜/败 + 阵营 + 原因 + 比分
@@ -611,10 +778,13 @@ func _banner_text(win: bool, winner: String, reason: String, scores: Dictionary,
 		var t: int = int(scores.get("T", 0))
 		var h: int = int(scores.get("HUMAN", 0))
 		var z: int = int(scores.get("ZOMBIE", 0))
-		if _room != null and _room.state.mode == Constants.MODE_DEFUSAL:
+		var md: String = str(_st().get("mode", "defusal"))
+		if md == Constants.MODE_ZOMBIE:
+			score_str = "\n比分 人类 %d : %d 丧尸" % [h, z]
+		elif md == "ctf" or md == "koth":
 			score_str = "\n比分 %d : %d" % [ct, t]
 		else:
-			score_str = "\n比分 人类 %d : %d 丧尸" % [h, z]
+			score_str = "\n比分 %d : %d" % [ct, t]
 	var prefix: String = "本回合" if is_round else "比赛"
 	if winner == "DRAW":
 		return "%s平局\n双方同归于尽%s" % [prefix, score_str]
@@ -686,11 +856,11 @@ func _on_player_death(_args: Dictionary) -> void:
 # ---------- rendering ----------
 func _render_frame(delta: float, alpha: float) -> void:
 	if _debug_pos and Engine.get_frames_drawn() == 300:
-		for pid2 in _room.state.players:
-			var pl: Dictionary = _room.state.players[pid2]
+		for pid2 in _st().players:
+			var pl: Dictionary = _st().players[pid2]
 			print("[DBG] player ", pid2, " team=", pl.team, " pos=", pl.pos, " alive=", pl.alive, " bot=", pl.isBot)
-		print("[DBG] local=", _local_id, " phase=", _room.state.phase)
-	var st: Dictionary = _room.state
+		print("[DBG] local=", _local_id, " phase=", _st().phase)
+	var st: Dictionary = _st()
 	_world.render_state(st, alpha)
 	var players_st: Dictionary = st.players
 	var local: Dictionary = players_st.get(_local_id, {})
@@ -786,7 +956,7 @@ func _render_frame(delta: float, alpha: float) -> void:
 		var spread: float = WeaponData.apply_spread(active_def, ads)
 		spread01 = clampf(spread / max(0.02, base * 2.5), 0.0, 1.0)
 	_hud.set_crosshair(spread01, ads)
-	if Input.is_action_pressed("scoreboard") and not _buy_menu.is_open():
+	if (Input.is_action_pressed("scoreboard") or _input_handler.force_scoreboard) and not _buy_menu.is_open():
 		_scoreboard.show_scoreboard()
 	else:
 		if _scoreboard.is_panel_visible():
@@ -1093,18 +1263,19 @@ func _update_footsteps(p: Dictionary, delta: float) -> void:
 func _open_buy_menu() -> void:
 	if _local_id == "" or _room == null:
 		return
-	var players_dict: Dictionary = _room.state.players
+	var players_dict: Dictionary = _st().players
 	var local: Dictionary = players_dict.get(_local_id, {})
 	if local.is_empty():
 		return
 	# CS 规则：购买阶段（phase=="buy"）允许死亡玩家打开菜单——回合结束刚阵亡、
 	# 队伍全灭时还没重生，此时必须能先为下一回合买枪。非购买阶段死亡则不允许。
-	if _room.state.phase != "buy" and not bool(local.alive):
+	if _st().phase != "buy" and not bool(local.alive):
 		return
-	if _room.state.mode != Constants.MODE_DEFUSAL and _room.state.mode != Constants.MODE_ZOMBIE:
+	var md: String = str(_st().get("mode", ""))
+	if not bool(_st().get("uses_money", false)) and md != Constants.MODE_ZOMBIE:
 		return
-	var bought: Array = _bought_list(local, _room.state.mode)
-	_buy_menu.open(_room.state.mode, int(local.money), int(local.armor), bought)
+	var bought: Array = _bought_list(local, _st().mode)
+	_buy_menu.open(_st().mode, int(local.money), int(local.armor), bought)
 	_input_handler.unlock_pointer()
 
 
@@ -1123,29 +1294,33 @@ func _bought_list(local: Dictionary, mode: String) -> Array:
 func _on_buy(item: String) -> void:
 	if _room == null or _local_id == "":
 		return
-	var players_dict: Dictionary = _room.state.players
+	var players_dict: Dictionary = _st().players
 	var local: Dictionary = players_dict.get(_local_id, {})
 	if local.is_empty():
 		return
-	var r: Dictionary
-	if _room.state.mode == Constants.MODE_DEFUSAL:
-		r = _room.handle_buy(local, item)
-	else:
-		r = _room.handle_zombie_select(local, item)
+	var r: Dictionary = {"ok": false}
+	if _net_client_mode:
+		Net.buy(item)
+		r = {"ok": true}
+	elif _room != null:
+		if bool(_st().get("uses_money", false)):
+			r = _room.handle_buy(local, item)
+		else:
+			r = _room.handle_zombie_select(local, item)
 	if not bool(r.get("ok", false)):
 		_sfx.empty()
-	_buy_menu.update_money(int(local.money), _bought_list(local, _room.state.mode))
+	_buy_menu.update_money(int(local.money), _bought_list(local, _st().mode))
 
 
 func _on_refund(item: String) -> void:
 	if _room == null or _local_id == "":
 		return
-	var players_dict: Dictionary = _room.state.players
+	var players_dict: Dictionary = _st().players
 	var local: Dictionary = players_dict.get(_local_id, {})
 	if local.is_empty():
 		return
 	_room.handle_refund(local, item)
-	_buy_menu.update_money(int(local.money), _bought_list(local, _room.state.mode))
+	_buy_menu.update_money(int(local.money), _bought_list(local, _st().mode))
 
 
 func _on_buy_menu_closed() -> void:
@@ -1167,12 +1342,48 @@ func _toggle_pause(paused: bool) -> void:
 func _on_menu_requested() -> void:
 	_toggle_pause(false)
 	_running = false
+	if Net.is_online():
+		Net.leave()
+	_net_client_mode = false
 	_room = null
 	_local_id = ""
 	_world.clear_map()
 	_input_handler.set_enabled(false)
 	_input_handler.unlock_pointer()
 	_main_menu.show_menu()
+
+
+func _auto_net_start() -> void:
+	var opts: Dictionary = {"name": str(Settings.get_str("gameplay", "player_name")), "mode": "tdm", "mapId": "cinder", "botCount": 4, "maxPlayers": 12}
+	if _auto_net_host > 0:
+		if _auto_net_relay != "":
+			Net.host_relay(_auto_net_relay, _auto_net_room, opts)
+		else:
+			Net.host_local(_auto_net_host, opts)
+		_main_menu.hide_menu()
+		_on_start_game(opts)
+	elif _auto_net_join != "":
+		if _auto_net_relay != "":
+			Net.relay_url = _auto_net_relay
+		Net.join(_auto_net_join, opts)
+		_main_menu.hide_menu()
+		# 等 welcome 帧（最多 6 秒），成功后才进入
+		var waited: float = 0.0
+		while Net.status != Net.Status.CLIENT and waited < 6.0:
+			await get_tree().create_timer(0.1).timeout
+			waited += 0.1
+		if Net.status != Net.Status.CLIENT:
+			print("[NET] join failed: status=", Net.status, " err=", Net.last_error)
+			_hud.show_message("连接失败：" + Net.last_error, 4.0)
+			_main_menu.show_menu()
+			return
+		print("[NET] joined as ", Net.local_id())
+		_on_start_game(opts)
+
+
+func _on_net_requested() -> void:
+	if _net_panel != null:
+		_net_panel.open()
 
 
 func _on_settings_changed(settings: Dictionary) -> void:
@@ -1222,6 +1433,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func _display_hint_touch() -> void:
+	# 首次进入移动端：给出 3 秒操作提示（不阻塞输入）
+	if not _hud.has_method("show_message"):
+		return
+	call_deferred("_touch_hint_later")
+
+
+func _touch_hint_later() -> void:
+	await get_tree().create_timer(1.2).timeout
+	_hud.show_message("左摇杆移动 · 右侧滑动视角 · 右下角开火", 4.0)
+
+
 func _on_toggle_bgm() -> void:
 	if _bgm == null:
 		return
@@ -1242,7 +1465,21 @@ func _toggle_fullscreen() -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and _running and not _paused:
-		_paused = true
-		_input_handler.unlock_pointer()
-		_hud.show_message("已暂停 - 按 Esc 继续", 99999.0)
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			if _running and not _paused:
+				_paused = true
+				_input_handler.unlock_pointer()
+				_hud.show_message("已暂停 - 按 Esc 继续", 99999.0)
+		NOTIFICATION_WM_GO_BACK_REQUEST:
+			# Android 返回键：优先关闭菜单 → 暂停 → 返回主菜单
+			if _buy_menu.is_open():
+				_buy_menu.hide_menu()
+				_input_handler.lock_pointer()
+			elif _running:
+				_toggle_pause(not _paused)
+		NOTIFICATION_WM_CLOSE_REQUEST:
+			if _running:
+				_toggle_pause(true)
+			else:
+				get_tree().quit()

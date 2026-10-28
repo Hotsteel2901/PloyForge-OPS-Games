@@ -1,4 +1,4 @@
-# 服务器玩家对象：创建、装备、生成、受伤、死亡。移植自 host/player.js
+# 玩家对象：创建、装备、生成、受伤、死亡。v2 起把「模式规则」全部交给 ModeBase。
 class_name Player
 extends RefCounted
 
@@ -6,64 +6,36 @@ const PHYS = Constants.PHYS
 const FINALE = Constants.FINALE
 
 
-# 工厂方法：创建一个玩家状态字典（用 Dictionary 以便运行时增删字段，
-# 与 JS 原实现保持一致；WeaponRuntime 作为对象存入）
 static func create(id: String, p_name: String, is_bot: bool = false) -> Dictionary:
 	return {
-		"id": id,
-		"name": p_name,
-		"isBot": is_bot,
-		"team": Constants.TEAM_NONE,
-		"teamPref": "random",
-		"alive": false,
-		"pos": Vector3(0, 2, 0),
-		"vel": Vector3(0, 0, 0),
-		"yaw": 0.0,
-		"pitch": 0.0,
-		"grounded": true,
-		"crouch": false,
-		"hp": 100.0,
-		"maxHp": 100.0,
-		"armor": 0,
-		"weapons": {},              # slot:int -> WeaponRuntime
-		"activeSlot": 1,
-		"grenadeCount": 1,
-		"money": Economy.START_MONEY,
-		"boughtItems": [],          # 购买阶段记录
-		"bombCarrier": false,
-		"isZombie": false,
-		"score": 0,
-		"kills": 0,
-		"deaths": 0,
-		"respawnAt": 0.0,
-		"lastHitAt": -99.0,
+		"id": id, "name": p_name, "isBot": is_bot,
+		"team": Constants.TEAM_NONE, "teamPref": "random",
+		"alive": false, "pos": Vector3(0, 2, 0), "vel": Vector3(0, 0, 0),
+		"yaw": 0.0, "pitch": 0.0, "grounded": true, "crouch": false,
+		"hp": 100.0, "maxHp": 100.0, "armor": 0,
+		"weapons": {}, "activeSlot": 1, "grenadeCount": 1,
+		"money": Economy.START_MONEY, "boughtItems": [], "bombCarrier": false,
+		"isZombie": false, "score": 0, "kills": 0, "deaths": 0,
+		"assists": 0, "captures": 0, "weaponLevel": 0, "wave": 0,
+		"respawnAt": 0.0, "lastHitAt": -99.0,
 		"input": {
 			"mv": [0, 0, 0, 0], "j": false, "s": false, "c": false,
 			"yaw": 0.0, "pitch": 0.0, "fire": false, "ads": false,
 			"r": false, "sw": -1, "swd": 0, "u": false,
 		},
 		"edge": {"sw": -1, "swd": 0, "r": false, "j": false, "u": false, "skill": false},
-		"switchSeq": 0,
-		"lastUseProgressAt": 0.0,
-		"useProgress": 0.0,
-		"useTarget": null,
+		"switchSeq": 0, "lastUseProgressAt": 0.0, "useProgress": 0.0, "useTarget": null,
 		"weaponMoveMult": 1.0,
-		"botBrain": null,           # BotBrain 实例
+		"botBrain": null,
 		"history": PositionHistory.new(),
-		"inputAt": 0.0,
-		"wasFiring": false,
-		"slowTicks": 0,
-		"selectedPrimary": null,    # 生化模式选枪
-		"zombieMoneyInit": false,
-		"zombieSince": 0.0,
-		"damageMult": 1.0,
-		"isCrystalHunter": false,
-		"isZombieKing": false,
-		"isZombieServant": false,
-		"speedOverride": null,
-		"boostUntil": 0.0,
-		"skillReadyAt": 0.0,
-		"boughtPhase": false,
+		"inputAt": 0.0, "wasFiring": false, "slowTicks": 0,
+		"selectedPrimary": null, "zombieMoneyInit": false, "zombieSince": 0.0,
+		"damageMult": 1.0, "isCrystalHunter": false, "isZombieKing": false, "isZombieServant": false,
+		"speedOverride": null, "boostUntil": 0.0, "skillReadyAt": 0.0, "boughtPhase": false,
+		# v2 新增
+		"stunUntil": 0.0, "flashUntil": 0.0, "lastDamageFrom": "", "lastDamageAt": -99.0,
+		"ping": 0, "packetLoss": 0.0, "connected": true, "isRemote": false,
+		"killedBy": "", "spawnProtectUntil": 0.0, "inHill": false, "waveBot": false,
 	}
 
 
@@ -73,33 +45,34 @@ static func give_loadout(p: Dictionary, mode: String, team: int) -> void:
 	p.weaponMoveMult = 1.0
 	p.grenadeCount = 0
 	if p.isZombie:
-		var claw_def: Dictionary = WeaponData.zombie_claw_def()
-		var claw := WeaponData.WeaponRuntime.new(claw_def)
-		p.weapons[0] = claw
+		p.weapons[0] = WeaponData.WeaponRuntime.new(WeaponData.zombie_claw_def())
 		p.activeSlot = 0
 		return
-	p.weapons[0] = WeaponData.WeaponRuntime.new(WeaponData.BUILTIN_WEAPONS.fang)
-	p.weapons[1] = WeaponData.WeaponRuntime.new(WeaponData.BUILTIN_WEAPONS.k9)
-	p.weapons[3] = WeaponData.WeaponRuntime.new(WeaponData.BUILTIN_WEAPONS.thunder)
-	if mode == Constants.MODE_DEFUSAL:
-		# 拆弹模式开局：只持手枪（无免费主武器），主武器通过购买获得
+	p.weapons[0] = WeaponData.WeaponRuntime.new(_def("fang"))
+	p.weapons[1] = WeaponData.WeaponRuntime.new(_def("k9"))
+	p.weapons[3] = WeaponData.WeaponRuntime.new(_def("thunder"))
+	if mode == Constants.MODE_DEFUSAL or mode == "tdm" or mode == "ffa" or mode == "koth" or mode == "ctf":
 		p.grenadeCount = 1
 		p.activeSlot = 1
 	else:
-		# 生化模式：免费主武器
-		var primary_def: Dictionary = WeaponData.BUILTIN_WEAPONS.arc17
-		p.weapons[2] = WeaponData.WeaponRuntime.new(primary_def)
+		p.weapons[2] = WeaponData.WeaponRuntime.new(_def("arc17"))
 		p.grenadeCount = 3
 		p.activeSlot = 2
+
+
+static func _def(id: String) -> Dictionary:
+	var d: Dictionary = WeaponDB.get_def(id)
+	if d.is_empty():
+		d = WeaponData.BUILTIN_WEAPONS.get(id, {})
+	return d
 
 
 # spawn 是字典（{x,y,z,yaw}），opts: {keepLoadout}
 static func spawn_player(room: Dictionary, p: Dictionary, team: int, spawn: Dictionary, opts: Dictionary = {}) -> void:
 	p.team = team
 	p.alive = true
-	var spawn_y: float = float(spawn.get("y", 0.05))
-	p.pos = Vector3(spawn.x, spawn_y, spawn.z)
-	p.vel = Vector3(0, 0, 0)
+	p.pos = Vector3(spawn.x, float(spawn.get("y", 0.05)), spawn.z)
+	p.vel = Vector3.ZERO
 	p.yaw = float(spawn.get("yaw", 0.0))
 	p.pitch = 0.0
 	p.grounded = true
@@ -111,7 +84,7 @@ static func spawn_player(room: Dictionary, p: Dictionary, team: int, spawn: Dict
 		p.useTarget = null
 	else:
 		p.armor = 0 if p.isZombie else 50
-		give_loadout(p, room.mode, team)
+		give_loadout(p, str(room.get("mode", "defusal")), team)
 	p.lastHitAt = -99.0
 	p.respawnAt = 0.0
 	p.useProgress = 0.0
@@ -119,15 +92,16 @@ static func spawn_player(room: Dictionary, p: Dictionary, team: int, spawn: Dict
 	p.speedOverride = null
 	p.boostUntil = 0.0
 	p.skillReadyAt = 0.0
-	# 生化模式：加入者初始 1000；人类重生后保持所选主武器（非僵尸）
-	if room.mode == Constants.MODE_ZOMBIE:
+	p.stunUntil = 0.0
+	p.spawnProtectUntil = float(room.get("time", 0.0)) + 1.2
+	p.inHill = false
+	if room.get("mode", "") == Constants.MODE_ZOMBIE:
 		if not p.zombieMoneyInit:
 			p.money = Economy.ZOMBIE_START_MONEY
 			p.zombieMoneyInit = true
 		if not p.isZombie and p.selectedPrimary != null and room.weapons.has(p.selectedPrimary):
 			p.weapons[2] = WeaponData.WeaponRuntime.new(room.weapons[p.selectedPrimary])
 			p.activeSlot = 2
-		# 琉璃决战期间新加入/重生的人类直接成为琉璃猎人
 		if room.finaleActive and not p.isZombie:
 			p.isCrystalHunter = true
 			p.hp = float(FINALE.HUNTER_HP)
@@ -136,33 +110,44 @@ static func spawn_player(room: Dictionary, p: Dictionary, team: int, spawn: Dict
 			p.damageMult = FINALE.HUNTER_DAMAGE
 
 
-# info: {weapon, headshot, dist}
+# info: {weapon, headshot, dist, armor_pen}
 static func damage_player(room: Dictionary, shooter: Variant, victim: Dictionary, amount: float, info: Dictionary = {}) -> Variant:
 	if not victim.alive:
 		return null
-	# 友伤拦截：同队伤害直接忽略
-	if shooter != null and shooter != victim and shooter.team == victim.team:
+	# 出生保护
+	if float(room.get("time", 0.0)) < float(victim.get("spawnProtectUntil", 0.0)):
 		return null
-	if victim.isZombie:
-		victim.slowTicks = int(PHYS.ZOMBIE_SLOW_TICKS)
-	# 变身倍率（琉璃猎人 / 尸王 / 尸仆 的伤害加成）
+	# 友伤：由模式决定
+	if shooter != null and shooter != victim and not room.get("friendly_fire", false):
+		if shooter.team == victim.team and not room.get("ffa", false):
+			return null
 	var mult: float = 1.0
 	if shooter != null and shooter != victim:
 		mult = float(shooter.get("damageMult", 1.0))
 	var dmg_int: int = int(round(amount * mult))
-	var ar := MathUtil.apply_armor(dmg_int, victim.armor)
+	# 护甲穿透：pen 越高，护甲吸收越少
+	var pen: float = clampf(float(info.get("armor_pen", 0.5)), 0.0, 1.0)
+	var eff_armor: int = int(float(victim.armor) * (1.0 - pen * 0.8))
+	var ar := MathUtil.apply_armor(dmg_int, eff_armor)
 	var damage: int = ar.damage
-	victim.armor = ar.armor
+	var armor_spent: int = eff_armor - int(ar.armor)
+	victim.armor = clampi(int(victim.armor) - armor_spent, 0, 100)
 	victim.hp -= float(damage)
 	victim.lastHitAt = float(room.time)
+	if shooter != null and shooter != victim:
+		victim.lastDamageFrom = str(shooter.id)
+		victim.lastDamageAt = float(room.time)
+	if victim.isZombie:
+		victim.slowTicks = int(PHYS.ZOMBIE_SLOW_TICKS)
+	# 电击枪定身
+	if info.has("stun"):
+		victim.stunUntil = float(room.time) + float(info.stun)
 	var result := {
-		"victim": victim,
-		"damage": damage,
-		"armor": ar.armor,
+		"victim": victim, "damage": damage, "armor": victim.armor,
 		"headshot": bool(info.get("headshot", false)),
 		"weapon": info.get("weapon", "unknown"),
+		"attacker": shooter.id if shooter != null else "",
 	}
-	# 事件钩子（room.on_event 字典映射，外部房间负责调用）
 	if room.events.has("player_damage"):
 		room.events.player_damage.call({"result": result, "attacker": shooter})
 	if victim.hp <= 0.0:
@@ -171,26 +156,26 @@ static func damage_player(room: Dictionary, shooter: Variant, victim: Dictionary
 
 
 static func kill_player(room: Dictionary, killer: Variant, victim: Dictionary, info: Dictionary = {}) -> void:
+	if not victim.alive:
+		return
 	victim.alive = false
 	victim.deaths += 1
-	room.dropBomb.call(victim)  # 携带者阵亡 → 炸弹掉落
+	victim.killedBy = str(killer.id) if killer != null else ""
 	if killer != null and killer != victim:
 		killer.kills += 1
 		killer.score += 10
-		# 生化模式：只有击杀丧尸才给 200；拆弹模式维持原有击杀奖励
 		if room.mode == Constants.MODE_ZOMBIE:
 			if victim.isZombie:
-				killer.money = min(Economy.MONEY_CAP, killer.money + Economy.ZOMBIE_KILL_REWARD)
-		else:
-			killer.money = min(Economy.MONEY_CAP, killer.money + Economy.KILL_REWARD)
+				killer.money = mini(Economy.MONEY_CAP, killer.money + Economy.ZOMBIE_KILL_REWARD)
+		elif room.get("uses_money", false):
+			killer.money = mini(Economy.MONEY_CAP, killer.money + Economy.KILL_REWARD)
 	else:
 		victim.score -= 5
 	var event := {
 		"type": "kill",
 		"killer": killer.id if killer != null else null,
 		"killerName": killer.name if killer != null else "",
-		"victim": victim.id,
-		"victimName": victim.name,
+		"victim": victim.id, "victimName": victim.name,
 		"weapon": info.get("weapon", "unknown"),
 		"headshot": bool(info.get("headshot", false)),
 		"zombie": 1 if victim.isZombie else 0,
@@ -198,37 +183,9 @@ static func kill_player(room: Dictionary, killer: Variant, victim: Dictionary, i
 	if room.events.has("player_death"):
 		room.events.player_death.call({"killer": killer, "victim": victim, "info": info})
 	room.broadcast.call(event)
-
-	if room.mode == Constants.MODE_ZOMBIE:
-		if room.noRespawn:
-			# 琉璃决战阶段：所有实体死亡后均不能复活 / 感染
-			victim.respawnAt = 0.0
-		elif not victim.isZombie:
-			victim.isZombie = true
-			victim.team = Constants.TEAM_ZOMBIE
-			victim.zombieSince = float(room.time)
-			victim.respawnAt = float(room.time) + 3.5
-			if room.core != null:
-				room.core.infect(victim.id)
-			room.broadcast.call({"type": "infected", "id": victim.id})
-		else:
-			victim.respawnAt = float(room.time) + 4.0
-		return
-
-	# 拆弹模式：检查整队是否全灭
-	if room.mode == Constants.MODE_DEFUSAL:
-		var t_alive := false
-		var ct_alive := false
-		for q in room.players.values():
-			if q.alive:
-				if q.team == Constants.TEAM_T:
-					t_alive = true
-				elif q.team == Constants.TEAM_CT:
-					ct_alive = true
-		if not t_alive and room.core != null:
-			room.core.team_eliminated(Constants.TEAM_T)
-		elif not ct_alive and room.core != null:
-			room.core.team_eliminated(Constants.TEAM_CT)
+	# 模式接管后续（复活/感染/掉落）
+	if room.get("onKilled", Callable()).is_valid():
+		room.onKilled.call(victim, killer, info)
 
 
 static func respawn_zombie(room: Dictionary, p: Dictionary) -> void:

@@ -16,6 +16,15 @@ var _ext_shot: Dictionary = {}
 var _footstep_paths: Array = []
 var plays_total: int = 0  # 累计播放次数（诊断用）
 
+# Mod 自定义音效注册表（name -> res:// path）
+static var _custom_paths: Dictionary = {}
+static var _custom_cache: Dictionary = {}
+
+
+static func register_custom(sound_name: String, path: String) -> void:
+	_custom_paths[sound_name] = path
+
+
 
 func _ready() -> void:
 	AudioServer.set_bus_volume_db(0, 0.0)
@@ -71,6 +80,16 @@ func _register_sample(stream: AudioStream) -> void:
 
 
 # ---------- 公开 API ----------
+## 位置化枪声：按距离衰减 + 左右声道（无 HRTF 时的廉价近似）
+func play_shot_at(kind: String, world_pos: Vector3, cam_pos: Vector3) -> void:
+	var stream: AudioStreamWAV = _get_stream("shot_" + kind)
+	if stream == null:
+		stream = _get_stream("shot_rifle")
+	if stream == null:
+		return
+	play_at(stream, world_pos, cam_pos, 45.0)
+
+
 func play_shot(kind: String) -> void:
 	var name: String = "shot_" + kind
 	var stream: AudioStreamWAV = _get_stream(name)

@@ -23,6 +23,13 @@ WeaponData="*res://scripts/data/weapons.gd"
 Economy="*res://scripts/data/economy.gd"
 MapData="*res://scripts/data/maps.gd"
 MathUtil="*res://scripts/sim/math_util.gd"
+Platform="*res://scripts/core/platform.gd"
+Settings="*res://scripts/core/settings.gd"
+Bus="*res://scripts/core/event_bus.gd"
+Perf="*res://scripts/core/perf_monitor.gd"
+WeaponDB="*res://scripts/data/weapon_db.gd"
+Mods="*res://scripts/mod/mod_loader.gd"
+Net="*res://scripts/net/net_manager.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]

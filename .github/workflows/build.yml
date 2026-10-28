@@ -1,0 +1,280 @@
+name: build
+
+# 全端构建：Linux / Windows / Web / Android
+# 触发：推送到 main、PR、手动、发布 tag
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+      - "NOTICE"
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      godot_version:
+        description: "Godot 版本（默认 4.7.2）"
+        required: false
+        default: "4.7.2"
+  release:
+    types: [published]
+
+# 同一分支只跑最新一次，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: ${{ github.event.inputs.godot_version || '4.7.2' }}
+  GODOT_CHANNEL: stable
+  PROJECT_NAME: PolyForgeOps
+
+jobs:
+  # ---------------------------------------------------------------- 静态检查
+  lint:
+    name: Lint · Mods & Scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验示例模组
+        run: |
+          set -e
+          for m in mods_examples/*/; do
+            echo "── $m"
+            python3 tools/modc/modc.py check "$m"
+          done
+
+      - name: 校验 modc 语法
+        run: python3 -m py_compile tools/modc/modc.py
+
+      - name: 校验 relay.js 语法
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check server/relay.js
+
+  # ---------------------------------------------------------------- 冒烟测试
+  smoke:
+    name: Smoke · ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [defusal, tdm, ffa, koth, ctf, gungame, zombie, survival]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-${{ runner.os }}-editor
+
+      - name: 下载 Godot 编辑器
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          mkdir -p ~/godot && cd ~/godot
+          curl -fL --retry 5 --retry-delay 3 -o editor.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_CHANNEL}/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64.zip"
+          unzip -oq editor.zip
+          chmod +x Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64
+          ln -sf "$PWD/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64" ~/godot/godot
+
+      - name: 导入资源
+        run: ~/godot/godot --headless --path . --import
+
+      - name: 跑 5 秒模拟
+        run: |
+          set -e
+          ~/godot/godot --headless --path . -- \
+            --autostart=cinder --mode=${{ matrix.mode }} --bots=5 --seconds=5 \
+            | tee run.log
+          grep -q "\[SELFTEST\] elapsed" run.log || { echo "::error::模式 ${{ matrix.mode }} 未完成模拟"; exit 1; }
+          if grep -q "SCRIPT ERROR" run.log; then echo "::error::存在脚本错误"; exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.mode }}
+          path: run.log
+          retention-days: 7
+
+  # ---------------------------------------------------------------- 桌面 / Web
+  build:
+    name: Build · ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: Linux
+            artifact: linux
+            path: build/linux/PolyForgeOps.x86_64
+          - preset: Windows Desktop
+            artifact: windows
+            path: build/windows/PolyForgeOps.exe
+          - preset: Web
+            artifact: web
+            path: build/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Godot + 模板
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-${{ runner.os }}-full
+
+      - name: 安装 Godot 与导出模板
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          mkdir -p ~/godot && cd ~/godot
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_CHANNEL}"
+          curl -fL --retry 5 --retry-delay 3 -o editor.zip  "$base/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64.zip"
+          curl -fL --retry 5 --retry-delay 3 -o templates.tpz "$base/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_export_templates.tpz"
+          unzip -oq editor.zip
+          chmod +x Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64
+          ln -sf "$PWD/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64" ~/godot/godot
+          mkdir -p ~/.local/share/godot/export_templates
+          unzip -oq templates.tpz -d /tmp/tpl
+          mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_CHANNEL}
+
+      - name: 导入资源
+        run: ~/godot/godot --headless --path . --import
+
+      - name: 导出 ${{ matrix.preset }}
+        run: |
+          set -e
+          mkdir -p "build/$(dirname '${{ matrix.path }}')"
+          ~/godot/godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.path }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: polyforge-${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          retention-days: 14
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Android
+  android:
+    name: Build · Android
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Godot + 模板
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-android-full
+
+      - name: 安装 Godot 与导出模板
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          mkdir -p ~/godot && cd ~/godot
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_CHANNEL}"
+          curl -fL --retry 5 --retry-delay 3 -o editor.zip  "$base/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64.zip"
+          curl -fL --retry 5 --retry-delay 3 -o templates.tpz "$base/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_export_templates.tpz"
+          unzip -oq editor.zip
+          chmod +x Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64
+          ln -sf "$PWD/Godot_v${GODOT_VERSION}-${GODOT_CHANNEL}_linux.x86_64" ~/godot/godot
+          mkdir -p ~/.local/share/godot/export_templates
+          unzip -oq templates.tpz -d /tmp/tpl
+          mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_CHANNEL}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Android SDK / NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018"
+          log-accepted-android-sdk-licenses: true
+
+      - name: 配置环境
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('export_presets.cfg') }}
+
+      - name: 安装 Gradle 构建模板
+        run: ~/godot/godot --headless --path . --install-android-build-template
+
+      - name: 导入资源
+        run: ~/godot/godot --headless --path . --import
+
+      - name: 导出 APK
+        run: |
+          set -e
+          mkdir -p build/android
+          ~/godot/godot --headless --path . --export-release "Android" build/android/${{ env.PROJECT_NAME }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: polyforge-android
+          path: build/android/*.apk
+          retention-days: 14
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Release
+  release:
+    name: Release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    needs: [build, android]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 整理产物
+        run: |
+          set -e
+          mkdir -p out
+          cp -r dist/polyforge-linux   out/linux   2>/dev/null || true
+          cp -r dist/polyforge-windows out/windows 2>/dev/null || true
+          cp -r dist/polyforge-web     out/web     2>/dev/null || true
+          cp -r dist/polyforge-android out/android 2>/dev/null || true
+          (cd out && zip -qr "../polyforge-${{ github.ref_name }}-windows.zip" windows) || true
+          (cd out && zip -qr "../polyforge-${{ github.ref_name }}-web.zip"     web)     || true
+          tar -czf "polyforge-${{ github.ref_name }}-linux.tar.gz" -C out linux || true
+          cp out/android/*.apk "polyforge-${{ github.ref_name }}.apk" 2>/dev/null || true
+          ls -lh polyforge-* || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            polyforge-*.zip
+            polyforge-*.tar.gz
+            polyforge-*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: false

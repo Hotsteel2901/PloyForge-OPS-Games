@@ -1,0 +1,10 @@
+{
+  "id": "hardcore",
+  "name": "硬核模式 · Hardcore",
+  "version": "1.0.0",
+  "author": "PolyForge",
+  "desc": "自定义模式示例：一滴血、随机武器、15 杀制胜。",
+  "api": 2,
+  "entry": "main.gd",
+  "dependencies": []
+}

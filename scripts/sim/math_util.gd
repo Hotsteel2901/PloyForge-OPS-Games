@@ -13,6 +13,9 @@ static func lerpf(a: float, b: float, t: float) -> float:
 
 
 static func clamp_angle(a: float) -> float:
+	# 防御：INF/NaN 会让下面的 while 变成死循环（武器/瞄准参数异常时会出现）
+	if not is_finite(a):
+		return 0.0
 	while a > PI:
 		a -= PI * 2.0
 	while a < -PI:

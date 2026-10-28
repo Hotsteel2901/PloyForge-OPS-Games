@@ -59,6 +59,11 @@ var _hp_vign: TextureRect
 var _ads_vign: TextureRect
 var _ads_vign_target: float = 0.0
 var _feed: VBoxContainer
+# 闪光弹 / 震屏
+var _flash_rect: ColorRect = null
+var _flash_t: float = 0.0
+var _flash_dur: float = 1.0
+var _shake_amt: float = 0.0
 
 
 func _ready() -> void:
@@ -97,6 +102,42 @@ func _process(delta: float) -> void:
 		var cur: float = _ads_vign.modulate.a
 		var nxt: float = lerpf(cur, _ads_vign_target, minf(1.0, delta * 6.0))
 		_ads_vign.modulate.a = nxt
+	# 闪光弹致盲：先全白再快速衰减
+	if _flash_t > 0.0 and _flash_rect != null:
+		_flash_t = maxf(0.0, _flash_t - delta)
+		var k: float = _flash_t / maxf(0.01, _flash_dur)
+		_flash_rect.color = Color(1, 1, 1, clampf(k * 1.35, 0.0, 0.98))
+	elif _flash_rect != null and _flash_rect.color.a > 0.001:
+		_flash_rect.color = Color(1, 1, 1, 0.0)
+	if _shake_amt > 0.0:
+		_shake_amt = maxf(0.0, _shake_amt - delta * 2.2)
+		_root.position = Vector2(randf_range(-1, 1), randf_range(-1, 1)) * _shake_amt * 12.0
+	elif _root.position != Vector2.ZERO:
+		_root.position = Vector2.ZERO
+
+
+## 闪光弹：屏幕全白并逐渐恢复
+func flash_screen(dur: float) -> void:
+	if _flash_rect == null:
+		_flash_rect = ColorRect.new()
+		_flash_rect.color = Color(1, 1, 1, 0)
+		_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_flash_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_root.add_child(_flash_rect)
+	_flash_dur = maxf(0.05, dur)
+	_flash_t = _flash_dur
+
+
+## 屏幕震动（爆炸 / 受击）
+func shake(amount: float) -> void:
+	_shake_amt = clampf(_shake_amt + amount, 0.0, 1.2)
+
+
+## 移动端：整体缩放，保证小屏可读
+func apply_ui_scale(s: float) -> void:
+	if _root != null:
+		_root.scale = Vector2(s, s)
+		_root.pivot_offset = get_viewport().get_visible_rect().size * 0.5
 
 
 func hide_ui() -> void:

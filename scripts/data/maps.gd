@@ -1458,6 +1458,9 @@ static func _boundary_walls(size: Vector2) -> Array:
 
 var MAPS: Dictionary = {}
 
+# 运行时注册的地图（Mod / 自定义关卡）
+var _extra_ids: Array = []
+
 
 
 
@@ -1484,7 +1487,51 @@ func get_map(map_id: String) -> Dictionary:
 
 func get_map_ids() -> Array:
 
-	return ["cinder", "containment", "obsidian"]
+	return ["cinder", "containment", "obsidian"] + _extra_ids
+
+
+## 运行时注册地图（Mod / 关卡包）。返回是否成功。
+func register_map(id: String, data: Dictionary) -> bool:
+
+	if id == "" or data.is_empty():
+
+		return false
+
+	var m: Dictionary = data.duplicate(true)
+
+	m["id"] = id
+
+	if not m.has("name"):
+
+		m["name"] = id
+
+	if m.get("nav", []).is_empty():
+
+		m["nav"] = _generate_nav(m)
+
+	MAPS[id] = m
+
+	if not _extra_ids.has(id):
+
+		_extra_ids.append(id)
+
+	print("[MapData] registered %s (%d colliders, %d nav)" % [id, m.get("colliders", []).size(), m.get("nav", []).size()])
+
+	return true
+
+
+func unregister_map(id: String) -> void:
+
+	if _extra_ids.has(id):
+
+		_extra_ids.erase(id)
+
+		MAPS.erase(id)
+
+
+func is_custom_map(id: String) -> bool:
+
+	return _extra_ids.has(id)
 
 
 

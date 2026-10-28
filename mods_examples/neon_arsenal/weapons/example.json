@@ -1,0 +1,22 @@
+{
+  "weapons": [
+    {
+      "id": "neon_arsenal_pulse",
+      "name": "Pulse 脉冲手枪",
+      "slot": 1,
+      "auto": false,
+      "damage": 40,
+      "fireRate": 320,
+      "headshotMult": 2.0,
+      "magSize": 14,
+      "reserve": 42,
+      "reloadTime": 1.5,
+      "spread": 0.026,
+      "adsSpread": 0.008,
+      "recoil": 0.024,
+      "cost": 900,
+      "category": "pistol",
+      "desc": "模组示例：一把更稳的副武器。"
+    }
+  ]
+}

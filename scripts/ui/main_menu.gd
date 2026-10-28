@@ -4,6 +4,7 @@ extends CanvasLayer
 # 主菜单：标题、模式选择、地图卡片、玩家名、Bot 数量、阵营、开始/退出。
 
 signal start_requested(opts: Dictionary)
+signal net_requested()
 signal quit_requested
 signal settings_changed(settings: Dictionary)
 
@@ -84,8 +85,11 @@ func _ready() -> void:
 	center.add_child(HSeparator.new())
 	center.add_child(HSeparator.new())
 
-	var mode_row := HBoxContainer.new()
-	mode_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var mode_row := GridContainer.new()
+	mode_row.columns = 4
+	mode_row.add_theme_constant_override("h_separation", 8)
+	mode_row.add_theme_constant_override("v_separation", 8)
+	mode_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	mode_row.add_theme_constant_override("separation", 16)
 	center.add_child(mode_row)
 	_build_mode_buttons(mode_row)
@@ -144,10 +148,20 @@ func _ready() -> void:
 
 	center.add_child(HSeparator.new())
 
+	var action_row := HBoxContainer.new()
+	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	action_row.add_theme_constant_override("separation", 10)
+	center.add_child(action_row)
+
 	var start_btn := _make_primary_button("开始游戏")
-	start_btn.custom_minimum_size = Vector2(300, 52)
+	start_btn.custom_minimum_size = Vector2(190, 52)
 	start_btn.pressed.connect(_on_start)
-	center.add_child(start_btn)
+	action_row.add_child(start_btn)
+
+	var net_btn := _make_ghost_button("联机对战")
+	net_btn.custom_minimum_size = Vector2(150, 52)
+	net_btn.pressed.connect(func(): net_requested.emit())
+	action_row.add_child(net_btn)
 
 	var settings_btn := _make_ghost_button("设置")
 	settings_btn.custom_minimum_size = Vector2(300, 40)
@@ -333,18 +347,18 @@ func _last_value_label() -> Label:
 
 # ---------- 构建 ----------
 func _build_mode_buttons(parent: Node) -> void:
-	var modes: Array = [
-		["defusal", "拆弹模式"],
-		["zombie", "生化模式"],
-	]
+	# 模式列表来自 ModeRegistry，Mod 注册的模式会自动出现在这里
+	var modes: Array = ModeRegistry.all()
 	for m in modes:
-		var id: String = m[0]
-		var label: String = m[1]
+		var id: String = str(m.get("id", ""))
+		var label: String = str(m.get("label", id))
 		var btn := _make_toggle_button(label)
+		btn.tooltip_text = str(m.get("desc", ""))
 		btn.pressed.connect(func(): _select_mode(id, btn))
 		parent.add_child(btn)
 		_mode_buttons.append(btn)
-	_select_mode("defusal", _mode_buttons[0])
+	if not _mode_buttons.is_empty():
+		_select_mode("defusal", _mode_buttons[0])
 
 
 func _select_mode(id: String, selected: Button) -> void:

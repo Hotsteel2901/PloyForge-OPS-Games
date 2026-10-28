@@ -1,0 +1,10 @@
+{
+  "id": "neon_arsenal",
+  "name": "neon_arsenal",
+  "version": "1.0.0",
+  "author": "anonymous",
+  "desc": "一个 PolyForge: Ops 模组",
+  "api": 2,
+  "entry": "main.gd",
+  "dependencies": []
+}
