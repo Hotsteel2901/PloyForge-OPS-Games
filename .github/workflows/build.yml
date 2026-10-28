@@ -119,13 +119,16 @@ jobs:
         include:
           - preset: Linux
             artifact: linux
-            path: build/linux/PolyForgeOps.x86_64
+            out: build/linux/PolyForgeOps.x86_64
+            dir: build/linux
           - preset: Windows Desktop
             artifact: windows
-            path: build/windows/PolyForgeOps.exe
+            out: build/windows/PolyForgeOps.exe
+            dir: build/windows
           - preset: Web
             artifact: web
-            path: build/web
+            out: build/web/index.html
+            dir: build/web
     steps:
       - uses: actions/checkout@v4
 
@@ -159,13 +162,14 @@ jobs:
       - name: 导出 ${{ matrix.preset }}
         run: |
           set -e
-          mkdir -p "$(dirname '${{ matrix.path }}')"
-          ~/godot/godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.path }}"
+          mkdir -p "${{ matrix.dir }}"
+          timeout 900 ~/godot/godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.out }}"
+          ls -lh "${{ matrix.dir }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: polyforge-${{ matrix.artifact }}
-          path: ${{ matrix.path }}
+          path: ${{ matrix.dir }}
           retention-days: 14
           if-no-files-found: error
 
@@ -226,11 +230,24 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('export_presets.cfg') }}
 
-      - name: 安装 Gradle 构建模板
-        run: ~/godot/godot --headless --path . --install-android-build-template
+      # 注意：不要用 --install-android-build-template —— 在 4.7.2 headless 下它会
+      # 启动编辑器并卡住（且此时 .godot 尚未生成，autoload 全报错）。
+      # 官方模板包本质就是 android_source.zip，直接解压到 android/build 等价且稳定。
+      - name: 安装 Android 构建模板
+        run: |
+          set -e
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_CHANNEL}"
+          rm -rf android/build
+          mkdir -p android/build
+          unzip -oq "$tpl/android_source.zip" -d android/build
+          touch android/.gdignore
+          ls android/build | head
 
       - name: 导入资源
-        run: ~/godot/godot --headless --path . --import
+        run: timeout 900 ~/godot/godot --headless --path . --import
+
+      - name: 复查导入（生成全局类缓存）
+        run: timeout 900 ~/godot/godot --headless --path . --import
 
       - name: 导出 APK
         run: |
