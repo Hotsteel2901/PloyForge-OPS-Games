@@ -241,6 +241,13 @@ jobs:
           mkdir -p android/build
           unzip -oq "$tpl/android_source.zip" -d android/build
           touch android/.gdignore
+          # 手工安装时必须补 .build_version，否则导出器报
+          # "no version info for it exists"。
+          # 从引擎版本串推导（4.7.2.stable.official.<hash> -> 4.7.2.stable）
+          ver=$(~/godot/godot --version | head -1)
+          short=$(printf '%s' "$ver" | awk -F'.' '{print $1"."$2"."$3"."$4}')
+          printf '%s\n' "$short" > android/build/.build_version
+          echo "build_version = $short"
           ls android/build | head
 
       - name: 导入资源
