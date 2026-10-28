@@ -159,7 +159,7 @@ jobs:
       - name: 导出 ${{ matrix.preset }}
         run: |
           set -e
-          mkdir -p "build/$(dirname '${{ matrix.path }}')"
+          mkdir -p "$(dirname '${{ matrix.path }}')"
           ~/godot/godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.path }}"
 
       - uses: actions/upload-artifact@v4
