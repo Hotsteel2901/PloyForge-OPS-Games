@@ -188,3 +188,6 @@ lights_and_shadows/positional_shadow/soft_shadow_filter_quality.web=1
 ; 2D MSAA：桌面 2x；Web（GLES3）不支持 2D MSAA，关闭
 anti_aliasing/quality/msaa_2d=1
 anti_aliasing/quality/msaa_2d.web=0
+
+; Android 导出要求：ETC2/ASTC 纹理压缩（否则导出器直接报配置错误）
+textures/vram_compression/import_etc2_astc=true
