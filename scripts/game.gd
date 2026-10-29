@@ -22,7 +22,10 @@ var _main_menu: MainMenu
 var _pause_menu: PauseMenu
 var _debug_overlay: DebugOverlay
 var _touch: TouchControls = null
+var _touch_layer: CanvasLayer = null
 var _net_panel: NetPanel = null
+var _settings_panel: SettingsPanel = null
+var _post_fx: PostFX = null
 
 var _room: Room = null
 var _net_client_mode: bool = false
@@ -81,6 +84,7 @@ var _menu_chars: Array = []
 var _buy_menu_delay: float = -1.0
 var _base_fov: float = DEFAULT_FOV
 var _settings_volume: float = 1.0
+var _bgm_tick: float = 0.0
 var _pf: int = 0
 var _auto_quit_at: float = 0.0
 var _auto_net_host: int = 0
@@ -124,8 +128,13 @@ func _ready() -> void:
 	_hud = HUD.new()
 	_hud.name = "HUD"
 	add_child(_hud)
-	if Platform.is_mobile or Platform.is_web:
-		_hud.apply_ui_scale(clampf(Platform.ui_scale() * Settings.get_float("graphics", "hud_scale"), 0.75, 1.6))
+	# UI 基准缩放（手机再放大 1.35 倍）+ 用户 HUD 缩放
+	Platform.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+	_hud.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+	# 全屏后处理（色散 / 颗粒 / 速度模糊）：默认关闭，设置开高才启用，避免空耗
+	_post_fx = PostFX.new()
+	_post_fx.name = "PostFX"
+	add_child(_post_fx)
 	_buy_menu = BuyMenu.new()
 	_buy_menu.name = "BuyMenu"
 	add_child(_buy_menu)
@@ -149,10 +158,13 @@ func _ready() -> void:
 	Perf.target_fps = 60 if (Platform.is_mobile or Platform.is_web) else int(clampf(Platform.refresh_hz, 30.0, 165.0))
 	# 触屏虚拟手柄
 	if Platform.wants_touch_ui():
+		_touch_layer = CanvasLayer.new()
+		_touch_layer.name = "TouchLayer"
+		_touch_layer.layer = 20
+		add_child(_touch_layer)
 		_touch = TouchControls.new()
 		_touch.name = "TouchControls"
-		_touch.z_index = 100
-		add_child(_touch)
+		_touch_layer.add_child(_touch)
 		_touch.setup(_input_handler)
 		_touch.refresh_from_settings()
 		_touch.pause_pressed.connect(func(): _toggle_pause(not _paused))
@@ -163,11 +175,23 @@ func _ready() -> void:
 	_main_menu.start_requested.connect(_on_start_game)
 	_main_menu.quit_requested.connect(func(): get_tree().quit())
 	_main_menu.settings_changed.connect(_on_settings_changed)
+	_main_menu.settings_requested.connect(func() -> void: _open_settings())
 	_main_menu.net_requested.connect(_on_net_requested)
+	_pause_menu.settings_requested.connect(func() -> void: _open_settings())
+	_settings_panel = SettingsPanel.new()
+	_settings_panel.name = "SettingsPanel"
+	add_child(_settings_panel)
+	# 任何设置改动都即时下发到各子系统（画面/音频/输入/触控/HUD）
+	Settings.changed.connect(_on_setting_changed)
+	Settings.applied.connect(func(_s: String) -> void: _apply_settings({}))
+	# 联机面板必须在菜单层（高于虚拟手柄 layer 20），否则触摸先被手柄吃掉
+	var net_layer := CanvasLayer.new()
+	net_layer.name = "NetLayer"
+	net_layer.layer = 36
+	add_child(net_layer)
 	_net_panel = NetPanel.new()
 	_net_panel.name = "NetPanel"
-	_net_panel.z_index = 90
-	add_child(_net_panel)
+	net_layer.add_child(_net_panel)
 	_net_panel.start_host.connect(func(opts: Dictionary): _net_panel.close(); _on_start_game(opts))
 	_net_panel.start_join.connect(func(_t: String, opts: Dictionary): _net_panel.close(); _on_start_game(opts))
 	_apply_settings(_main_menu.get_settings())
@@ -225,6 +249,8 @@ func _ready() -> void:
 			_yaw_override = float(a.get_slice("=", 1))
 		elif a == "--debug-pos":
 			_debug_pos = true
+		elif a == "--optsettings":
+			call_deferred("_open_settings")
 		elif a.begins_with("--autoreload="):
 			_auto_reload_at = int(a.get_slice("=", 1))
 		elif a == "--notaa":
@@ -424,6 +450,23 @@ func _process(delta: float) -> void:
 		return
 	if _paused:
 		return
+	# 动态音乐：残局越紧张，BGM 音高略微上扬
+	if _bgm != null and _elapsed - _bgm_tick > 0.5:
+		_bgm_tick = _elapsed
+		var st_now: Dictionary = _st()
+		var pls: Dictionary = st_now.get("players", {})
+		var alive_total: int = 0
+		var local_pv: Dictionary = pls.get(_local_id, {})
+		var local_hp: float = float(local_pv.get("hp", 100.0))
+		for pv in pls.values():
+			if bool(pv.get("alive", false)):
+				alive_total += 1
+		var tension: float = 0.0
+		if bool(st_now.get("localAlive", true)):
+			tension = clampf(1.0 - float(alive_total) / 10.0, 0.0, 1.0) * 0.7
+			tension = maxf(tension, clampf(1.0 - local_hp / 100.0, 0.0, 1.0) * 0.6)
+		if _bgm.has_method("set_intensity"):
+			_bgm.set_intensity(tension)
 	# 购买菜单延迟弹出（先展示回合结束横幅）
 	if _buy_menu_delay > 0.0:
 		_buy_menu_delay -= delta
@@ -522,6 +565,11 @@ func _step_sim() -> void:
 	var players_dict: Dictionary = _st().players
 	var local: Dictionary = players_dict.get(_local_id, {})
 	if not local.is_empty():
+		# 自动换弹：弹夹空且还有备弹时，替玩家按一次 R（不覆盖玩家手动输入）
+		if Settings.get_bool("controls", "auto_reload") and bool(local.alive):
+			var aw: Variant = local.weapons.get(int(local.activeSlot), null)
+			if aw != null and int(aw.ammo) <= 0 and int(aw.reserve) > 0:
+				_input_handler.edge.r = true
 		_input_handler.snapshot_to(local.input)
 		local.edge.sw = _input_handler.edge.sw
 		local.edge.swd = _input_handler.edge.swd
@@ -840,8 +888,11 @@ func _on_player_damage(args: Dictionary) -> void:
 		_hud.on_damage()
 		_sfx.damage()
 	elif attacker != null and str(attacker.get("id", "")) == _local_id:
+		var hs: bool = bool(result.get("headshot", false))
 		_hud.on_hit_marker()
-		_sfx.hit(bool(result.get("headshot", false)))
+		if Settings.get_bool("gameplay", "hitmarker_sound"):
+			_sfx.hit(hs)
+		_hud.show_damage_number(int(result.get("damage", 0)), hs)
 		var vp: Dictionary = result.get("victim", {})
 		var vpos: Variant = vp.get("pos", null) if vp is Dictionary else null
 		if vpos != null and vpos is Vector3:
@@ -988,10 +1039,17 @@ func _update_camera(p: Dictionary, delta: float) -> void:
 	# 冲刺判定（与物理一致：冲刺键 + 前向移动 + 接地 + 非蹲）
 	var sprinting: bool = bool(p.input.s) and not bool(p.crouch) and not bool(p.isZombie) and bool(p.grounded) and speed > 3.0
 	# headbob：相位按移动速度累积，X/Y 双轴不同频率（参考 Cogito 的 wiggle 实现）
-	if bool(p.alive) and bool(p.grounded) and speed > 0.5:
+	# 视角晃动强度（0 = 关闭；"减少动效"直接归零）
+	var vb: float = Settings.get_float("gameplay", "view_bob")
+	if Settings.get_bool("accessibility", "reduce_motion"):
+		vb = 0.0
+	vb = clampf(vb, 0.0, 2.0)
+	if _post_fx != null:
+		_post_fx.set_speed(clampf(speed / 8.0, 0.0, 1.0))
+	if bool(p.alive) and bool(p.grounded) and speed > 0.5 and vb > 0.001:
 		var freq: float = 12.0 if sprinting else 9.0
 		_bob_phase += delta * freq
-		var target_amt: float = 0.022 if sprinting else 0.012
+		var target_amt: float = (0.022 if sprinting else 0.012) * vb
 		_bob_amt.x = lerpf(_bob_amt.x, target_amt, minf(1.0, delta * 6.0))
 		_bob_amt.y = lerpf(_bob_amt.y, target_amt, minf(1.0, delta * 6.0))
 		var bob_x: float = sin(_bob_phase * 0.5) * _bob_amt.x * 0.6
@@ -1018,7 +1076,9 @@ func _update_camera(p: Dictionary, delta: float) -> void:
 	var ads_active: bool = false
 	# 只有枪械能开镜：近战（匕首/尸爪）与投掷物（手雷）禁止 ADS
 	if not active_def.is_empty() and not active_def.get("melee", false) and not active_def.has("projectile") and bool(p.input.ads) and not bool(p.isZombie):
-		var ads_mult: float = ViewmodelFactory.get_ads_fov(str(active_def.get("id", "vx9"))) / DEFAULT_FOV
+		var ads_mult: float = 1.0
+		if Settings.get_bool("graphics", "weapon_fov_scale"):
+			ads_mult = ViewmodelFactory.get_ads_fov(str(active_def.get("id", "vx9"))) / DEFAULT_FOV
 		ads_fov = _base_fov * ads_mult
 		ads_active = true
 	# 冲刺 FOV 扩展（速度感）：非 ADS 时冲刺平滑把 FOV 放大，回正同理
@@ -1031,6 +1091,48 @@ func _update_camera(p: Dictionary, delta: float) -> void:
 	_hud.set_ads_vignette(1.0 if ads_active else 0.0)
 	# ADS scope overlay
 	_hud.set_scope(str(active_def.get("id", "vx9")) if not active_def.is_empty() else "", ads_active)
+	_apply_aim_assist(p, delta)
+
+
+## 辅助瞄准：仅在开镜时对最近敌人做极缓慢的视角吸附（触屏/手柄）。
+## 强度 0.35 时约每秒 20% 的剩余夹角，不会出现"自动锁头"。
+func _apply_aim_assist(p: Dictionary, delta: float) -> void:
+	if _input_handler == null or _input_handler.aim_assist <= 0.0:
+		return
+	if not bool(p.alive) or not bool(p.input.ads):
+		return
+	var cam_pos: Vector3 = _camera.global_position
+	var yaw: float = _input_handler.get_yaw()
+	var pitch: float = _input_handler.get_pitch()
+	var my_team: int = int(p.get("team", 0))
+	var best: Dictionary = {}
+	var best_ang: float = 0.16
+	var players: Dictionary = _st().get("players", {})
+	for e in players.values():
+		if str(e.get("id", "")) == _local_id or not bool(e.get("alive", false)):
+			continue
+		if int(e.get("team", 0)) == my_team:
+			continue
+		var ep: Variant = e.get("pos", null)
+		if ep == null or not (ep is Vector3):
+			continue
+		var d: Vector3 = (ep as Vector3) + Vector3(0.0, 1.25, 0.0) - cam_pos
+		var dist: float = d.length()
+		if dist > 45.0 or dist < 1.0:
+			continue
+		var want_yaw: float = atan2(-d.x, -d.z)
+		var want_pitch: float = asin(clampf(d.y / dist, -1.0, 1.0))
+		var dy: float = fposmod(want_yaw - yaw + PI, TAU) - PI
+		var dp: float = want_pitch - pitch
+		var ang: float = sqrt(dy * dy + dp * dp)
+		if ang < best_ang:
+			best_ang = ang
+			best = {"dy": dy, "dp": dp, "dist": dist}
+	if best.is_empty():
+		return
+	var k: float = _input_handler.aim_assist * 0.55 * delta
+	k *= clampf(float(best.dist) / 12.0, 0.25, 1.0)
+	_input_handler.aim_delta(float(best.dy) * k, float(best.dp) * k)
 
 
 func _update_viewmodel(p: Dictionary, delta: float, ammo: int = 0, reserve: int = 0) -> void:
@@ -1386,26 +1488,108 @@ func _on_net_requested() -> void:
 		_net_panel.open()
 
 
-func _on_settings_changed(settings: Dictionary) -> void:
-	_apply_settings(settings)
-	_save_settings(settings)
+func _open_settings() -> void:
+	if _settings_panel == null:
+		return
+	if _input_handler != null:
+		_input_handler.unlock_pointer()
+	_settings_panel.open()
 
 
-func _apply_settings(settings: Dictionary) -> void:
-	_base_fov = clampf(float(settings.get("fov", DEFAULT_FOV)), 70.0, 110.0)
-	_settings_volume = clampf(float(settings.get("volume", 1.0)), 0.0, 1.0)
-	AudioServer.set_bus_volume_db(0, linear_to_db(_settings_volume))
+func _on_settings_changed(_settings: Dictionary) -> void:
+	# 兼容旧信号：主菜单不再维护独立设置字典，统一走 Settings
+	_apply_settings({})
+
+
+## 全量应用设置（启动、导入、恢复默认、批量变更）
+var _applying_settings: bool = false
+
+
+func _apply_settings(_settings: Dictionary = {}) -> void:
+	if _applying_settings:
+		return
+	_applying_settings = true
+	_base_fov = clampf(Settings.get_float("graphics", "fov"), 60.0, 120.0)
 	if _bgm != null:
-		_bgm.set_volume_linear(_settings_volume)
-		_bgm.set_enabled(bool(settings.get("bgm", true)))
+		_bgm.set_enabled(Settings.get_float("audio", "music") > 0.001)
+		_bgm.set_volume_linear(Settings.get_float("audio", "music"))
+		if _bgm.has_method("set_dynamic"):
+			_bgm.set_dynamic(Settings.get_bool("audio", "music_dynamic"))
+	if _input_handler != null:
+		_input_handler.refresh_settings()
+	if _sfx != null:
+		_sfx.set_hrtf(Settings.get_bool("audio", "hrtf"))
+	if _hud != null:
+		_hud.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+		if _hud.has_method("apply_accessibility"):
+			_hud.apply_accessibility()
+	Platform.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+	Platform.apply_quality(Settings.get_int("graphics", "quality"), get_viewport())
+	Platform.set_render_scale(Settings.get_float("graphics", "render_scale"))
+	Perf.auto_scale = Settings.get_bool("graphics", "auto_scale")
+	_apply_render_settings()
+	if _touch != null:
+		_touch.refresh_from_settings()
+	# 最后再套用音频总线 / VSYNC / 帧率上限，避免被 apply_quality 覆盖
+	Settings.apply()
+	_applying_settings = false
 
 
-func _save_settings(settings: Dictionary) -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("game", "fov", clampf(float(settings.get("fov", DEFAULT_FOV)), 70.0, 110.0))
-	cfg.set_value("game", "volume", clampf(float(settings.get("volume", 1.0)), 0.0, 1.0))
-	cfg.set_value("game", "bgm", bool(settings.get("bgm", true)))
-	cfg.save("user://settings.cfg")
+## 单项变更的即时分发（滑块拖动时逐帧调用，必须便宜）
+func _on_setting_changed(section: String, key: String, _value: Variant) -> void:
+	match section:
+		"graphics":
+			match key:
+				"quality":
+					Platform.apply_quality(Settings.get_int("graphics", "quality"), get_viewport())
+				"render_scale":
+					Platform.set_render_scale(Settings.get_float("graphics", "render_scale"))
+				"auto_scale":
+					Perf.auto_scale = Settings.get_bool("graphics", "auto_scale")
+				"fov":
+					_base_fov = clampf(Settings.get_float("graphics", "fov"), 60.0, 120.0)
+				"hud_scale":
+					Platform.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+					if _hud != null:
+						_hud.apply_ui_scale(Settings.get_float("graphics", "hud_scale"))
+				"vsync", "fps_limit":
+					Settings.apply()
+				_:
+					_apply_render_settings()
+		"controls":
+			if _input_handler != null:
+				_input_handler.refresh_settings()
+			if _touch != null:
+				_touch.refresh_from_settings()
+		"audio":
+			if key == "hrtf" and _sfx != null:
+				_sfx.set_hrtf(Settings.get_bool("audio", "hrtf"))
+			elif key == "music_dynamic" and _bgm != null and _bgm.has_method("set_dynamic"):
+				_bgm.set_dynamic(Settings.get_bool("audio", "music_dynamic"))
+			Settings.apply()
+		"gameplay", "accessibility":
+			if _hud != null and _hud.has_method("apply_accessibility"):
+				_hud.apply_accessibility()
+			if _post_fx != null:
+				_post_fx.refresh_from_settings()
+			if _camera != null and _viewmodel_root != null:
+				_apply_view_bob_scale()
+		"network":
+			if Net != null and Net.has_method("reload_settings"):
+				Net.reload_settings()
+
+
+func _apply_render_settings() -> void:
+	if _world != null and _world.has_method("apply_graphics_settings"):
+		_world.apply_graphics_settings()
+	if _post_fx != null:
+		_post_fx.refresh_from_settings()
+
+
+func _apply_view_bob_scale() -> void:
+	# 视角晃动由 _process 里读设置，这里只做即时归零，避免关掉后残留偏移
+	if Settings.get_float("gameplay", "view_bob") <= 0.001:
+		_bob_amt = Vector2.ZERO
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1467,10 +1651,16 @@ func _toggle_fullscreen() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			if Settings.get_bool("audio", "mute_unfocused"):
+				AudioServer.set_bus_mute(0, true)
 			if _running and not _paused:
 				_paused = true
 				_input_handler.unlock_pointer()
 				_hud.show_message("已暂停 - 按 Esc 继续", 99999.0)
+		NOTIFICATION_APPLICATION_FOCUS_IN:
+			if Settings.get_bool("audio", "mute_unfocused"):
+				AudioServer.set_bus_mute(0, false)
+				Settings.apply()
 		NOTIFICATION_WM_GO_BACK_REQUEST:
 			# Android 返回键：优先关闭菜单 → 暂停 → 返回主菜单
 			if _buy_menu.is_open():

@@ -1,7 +1,17 @@
-# Crosshair: guaranteed-visible cross built from plain ColorRect children
-# (no custom _draw — avoids dynamic-draw issues). Spread gap animates with weapon spread.
+# Crosshair: 4 种样式 / 6 种颜色，随散布动态张开。
+# 用 _draw 直接画（比一堆 ColorRect 更省节点，也方便加圆环/三角样式）。
 class_name Crosshair
 extends Control
+
+const COLORS: Array = [
+	Color(0.0, 0.9, 1.0, 1.0),
+	Color(0.35, 1.0, 0.45, 1.0),
+	Color(1.0, 0.28, 0.22, 1.0),
+	Color(1.0, 0.88, 0.25, 1.0),
+	Color(1.0, 1.0, 1.0, 1.0),
+	Color(1.0, 0.35, 1.0, 1.0),
+]
+const OUTLINE: Color = Color(0.0, 0.0, 0.0, 0.85)
 
 var base_gap: float = 8.0
 var max_spread_gap: float = 30.0
@@ -9,39 +19,28 @@ var spread01: float = 0.0
 var ads: bool = false
 var flash_t: float = 0.0
 var gap: float = 8.0
-
-var _segs: Array = []   # [{bg: ColorRect, fg: ColorRect}]
-var _dot_bg: ColorRect
-var _dot: ColorRect
+var style: int = 0
+var color: Color = Color(0.0, 0.9, 1.0, 1.0)
 
 const SEG_LEN: float = 9.0
 const SEG_W: float = 3.0
-const COL: Color = Color(0.0, 0.9, 1.0, 1.0)
-const OUT: Color = Color(0.0, 0.0, 0.0, 0.9)
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	set_anchors_preset(Control.PRESET_FULL_RECT)
-	# 4 segments (right, left, bottom, top) each with a dark outline layer behind
-	for i in 4:
-		var bg := ColorRect.new()
-		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bg.color = OUT
-		add_child(bg)
-		var fg := ColorRect.new()
-		fg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		fg.color = COL
-		add_child(fg)
-		_segs.append({"bg": bg, "fg": fg})
-	_dot_bg = ColorRect.new()
-	_dot_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_dot_bg.color = OUT
-	add_child(_dot_bg)
-	_dot = ColorRect.new()
-	_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_dot.color = COL
-	add_child(_dot)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	apply_settings()
+	set_process(true)
+
+
+func apply_settings() -> void:
+	style = Settings.get_int("gameplay", "crosshair_style") if Settings != null else 0
+	var idx: int = Settings.get_int("gameplay", "crosshair_color") if Settings != null else 0
+	color = COLORS[clampi(idx, 0, COLORS.size() - 1)]
+	# 色盲模式：红/绿色盲用高对比的黄色
+	if Settings != null and Settings.get_int("accessibility", "colorblind") > 0:
+		color = Color(1.0, 0.95, 0.2, 1.0)
+	queue_redraw()
 
 
 func set_spread(s: float, a: bool) -> void:
@@ -57,46 +56,49 @@ func _process(delta: float) -> void:
 	var target: float = base_gap * (0.45 if ads else 1.0) + spread01 * max_spread_gap
 	gap = lerpf(gap, target, 0.25)
 	if flash_t > 0.0:
-		flash_t -= delta
-	_update_positions()
+		flash_t = maxf(0.0, flash_t - delta)
+	queue_redraw()
 
 
-func _update_positions() -> void:
+func _draw() -> void:
 	var cx: float = size.x * 0.5
 	var cy: float = size.y * 0.5
-	var c: Color = Color(1.0, 0.3, 0.2, 1.0) if flash_t > 0.0 else COL
+	var c: Color = Color(1.0, 0.35, 0.25, 1.0) if flash_t > 0.0 else color
 	var g: float = gap
-	# ADS: hide the 4-line cross, keep only a smaller center dot
-	for seg in _segs:
-		seg.bg.visible = not ads
-		seg.fg.visible = not ads
+
 	if ads:
-		_dot_bg.position = Vector2(cx - 2.0, cy - 2.0)
-		_dot_bg.size = Vector2(4, 4)
-		_dot.position = Vector2(cx - 1.0, cy - 1.0)
-		_dot.size = Vector2(2, 2)
-		_dot.color = Color(1.0, 0.95, 0.85, 0.95)
-	else:
-		# right
-		_place_seg(_segs[0], cx + g, cy, SEG_LEN, SEG_W, c)
-		# left
-		_place_seg(_segs[1], cx - g - SEG_LEN, cy, SEG_LEN, SEG_W, c)
-		# bottom
-		_place_seg(_segs[2], cx, cy + g, SEG_W, SEG_LEN, c)
-		# top
-		_place_seg(_segs[3], cx, cy - g - SEG_LEN, SEG_W, SEG_LEN, c)
-		_dot_bg.position = Vector2(cx - 2.5, cy - 2.5)
-		_dot_bg.size = Vector2(5, 5)
-		_dot.position = Vector2(cx - 1.5, cy - 1.5)
-		_dot.size = Vector2(3, 3)
-		_dot.color = c
+		# 开镜：只留 2px 中心点
+		draw_circle(Vector2(cx, cy), 2.4, OUTLINE)
+		draw_circle(Vector2(cx, cy), 1.3, Color(1.0, 0.95, 0.85, 0.95))
+		return
+
+	match style:
+		1:  # 点
+			draw_circle(Vector2(cx, cy), 2.6, OUTLINE)
+			draw_circle(Vector2(cx, cy), 1.5, c)
+		2:  # 圆环 + 点
+			draw_arc(Vector2(cx, cy), g + SEG_LEN * 0.45, 0.0, TAU, 48, OUTLINE, SEG_W + 2.0, true)
+			draw_arc(Vector2(cx, cy), g + SEG_LEN * 0.45, 0.0, TAU, 48, c, SEG_W, true)
+			draw_circle(Vector2(cx, cy), 1.8, c)
+		3:  # 三角
+			var r: float = g + SEG_LEN
+			var pts := PackedVector2Array([
+				Vector2(cx, cy - r),
+				Vector2(cx + r * 0.866, cy + r * 0.5),
+				Vector2(cx - r * 0.866, cy + r * 0.5),
+				Vector2(cx, cy - r),
+			])
+			draw_polyline(pts, OUTLINE, SEG_W + 2.0, true)
+			draw_polyline(pts, c, SEG_W, true)
+			draw_circle(Vector2(cx, cy), 1.8, c)
+		_:  # 十字
+			_seg(cx + g, cy, SEG_LEN, SEG_W, c)
+			_seg(cx - g - SEG_LEN, cy, SEG_LEN, SEG_W, c)
+			_seg(cx, cy + g, SEG_W, SEG_LEN, c)
+			_seg(cx, cy - g - SEG_LEN, SEG_W, SEG_LEN, c)
+			draw_circle(Vector2(cx, cy), 1.6, c)
 
 
-func _place_seg(seg: Dictionary, x: float, y: float, w: float, h: float, c: Color) -> void:
-	var fg: ColorRect = seg.fg
-	var bg: ColorRect = seg.bg
-	fg.position = Vector2(x, y)
-	fg.size = Vector2(w, h)
-	fg.color = c
-	bg.position = Vector2(x - 1.0, y - 1.0)
-	bg.size = Vector2(w + 2.0, h + 2.0)
+func _seg(x: float, y: float, w: float, h: float, c: Color) -> void:
+	draw_rect(Rect2(x - 1.0, y - 1.0, w + 2.0, h + 2.0), OUTLINE, true)
+	draw_rect(Rect2(x, y, w, h), c, true)

@@ -39,6 +39,19 @@ window/size/viewport_height=1080
 window/size/mode=2
 window/size/window_width_override=1920
 window/size/window_height_override=1080
+; UI 按 1080p 基准等比缩放：手机（20:9 等）用 expand 补齐超宽区域，
+; 桌面高分辨率屏幕自动放大，不再出现"字小到看不清"的情况。
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+; 强制横屏（Android）：0=landscape 1=portrait 2=reverse_landscape 3=reverse_portrait 4=sensor_landscape
+window/handheld/orientation=4
+
+[input_devices]
+
+; 触摸不再模拟鼠标：避免移动端"触摸按下→模拟鼠标→左键 fire=false"把开火清掉，
+; 同时防止一次触摸被 UI 与虚拟手柄重复处理。
+pointing/emulate_mouse_from_touch=false
+pointing/emulate_touch_from_mouse=false
 
 [editor_plugins]
 

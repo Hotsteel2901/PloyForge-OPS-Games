@@ -24,6 +24,9 @@ var _fade_gain: float = 1.0
 var _fade_target: float = 1.0
 var _fade_step: float = 0.0
 var _song_title: String = ""
+## 动态音乐：按战况（剩余敌人/血量）微调音高与音量，制造紧张感
+var _dynamic: bool = true
+var _intensity: float = 0.0
 
 
 func _ready() -> void:
@@ -81,6 +84,20 @@ func set_volume_linear(vol: float) -> void:
 	# 覆盖成 0dB（那样音乐会比预期响 3 倍多、盖过音效）。
 	if _bus_index >= 0:
 		AudioServer.set_bus_volume_db(_bus_index, linear_to_db(clampf(vol, 0.0, 1.0) * VOLUME))
+
+
+## 动态音乐开关（设置 audio/music_dynamic）
+func set_dynamic(on: bool) -> void:
+	_dynamic = on
+	if not on and _player != null:
+		_player.pitch_scale = 1.0
+
+
+## 战况强度 0..1：0=平稳，1=残局/濒死
+func set_intensity(v: float) -> void:
+	_intensity = clampf(v, 0.0, 1.0)
+	if _dynamic and _player != null:
+		_player.pitch_scale = lerpf(0.985, 1.045, _intensity)
 
 
 func is_enabled() -> bool:

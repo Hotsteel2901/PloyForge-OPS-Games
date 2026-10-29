@@ -10,6 +10,10 @@ var _flash_lights: Array = []
 var _explosion_lights: Array = []
 var _trail_nodes: Array = []
 var _decal_nodes: Array = []
+## 用户设置开关（graphics 段）
+var enable_blood: bool = true
+var enable_decals: bool = true
+var enable_shells: bool = true
 var _casings: Array = []
 var _next_light: int = 0
 # 枪口闪光节点池：每发 3 节点（2 quad + 1 core），复用避免场景树 churn
@@ -406,7 +410,7 @@ func impact(pos: Vector3, normal: Vector3 = Vector3.UP, color: Color = Color(0.7
 		parts.set_meta("auto_free", true)
 		_trail_nodes.append(parts)
 	# small decal
-	if _decal_nodes.size() < 24:
+	if enable_decals and _decal_nodes.size() < 24:
 		var mi := MeshInstance3D.new()
 		mi.mesh = _get_decal_quad()
 		mi.material_override = _get_decal_mat()
@@ -421,8 +425,14 @@ func impact(pos: Vector3, normal: Vector3 = Vector3.UP, color: Color = Color(0.7
 		_decal_nodes.append(mi)
 
 
+func apply_user_settings() -> void:
+	enable_blood = Settings.get_bool("graphics", "blood") and not Settings.get_bool("accessibility", "reduce_motion")
+	enable_decals = Settings.get_bool("graphics", "decals") and Platform.fx_enabled("decals")
+	enable_shells = Settings.get_bool("graphics", "shells")
+
+
 func blood(pos: Vector3) -> void:
-	if IS_WEB:
+	if IS_WEB or not enable_blood:
 		return
 	var parts := _setup_particles(GPUParticles3D.new())
 	parts.amount = 10
@@ -491,7 +501,7 @@ func explosion(pos: Vector3, radius: float = 8.0) -> void:
 	add_child(ring)
 	_trail_nodes.append(ring)
 	# scorch decal
-	if _decal_nodes.size() < 24:
+	if enable_decals and _decal_nodes.size() < 24:
 		var dec: QuadMesh = _get_scorch_quad()
 		dec.size = Vector2(radius * 0.5, radius * 0.5)
 		var mat := StandardMaterial3D.new()
@@ -526,7 +536,7 @@ func smoke(pos: Vector3, color: Color = Color(0.5, 0.47, 0.42)) -> void:
 
 
 func shell_casing(pos: Vector3, dir: Vector3) -> void:
-	if IS_WEB:
+	if IS_WEB or not enable_shells:
 		return
 	# 超过上限：丢弃最老的弹壳（优先保留最新弹壳的视觉效果）
 	while _casings.size() >= MAX_CASINGS:

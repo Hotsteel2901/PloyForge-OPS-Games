@@ -419,3 +419,12 @@ func on_shell(pos: Vector3, dir: Vector3) -> void:
 
 func clear_effects() -> void:
 	effects.clear_all()
+
+
+## 设置变更后重刷画面相关开关（后处理、特效、阴影）
+func apply_graphics_settings() -> void:
+	var env_node: Node = get_node_or_null("Env")
+	if env_node != null and env_node.has_method("apply_user_settings"):
+		env_node.apply_user_settings()
+	if effects != null and effects.has_method("apply_user_settings"):
+		effects.apply_user_settings()

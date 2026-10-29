@@ -67,6 +67,7 @@ var _shake_amt: float = 0.0
 
 
 func _ready() -> void:
+	layer = 10
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -128,9 +129,61 @@ func flash_screen(dur: float) -> void:
 	_flash_t = _flash_dur
 
 
-## 屏幕震动（爆炸 / 受击）
+## 屏幕震动（爆炸 / 受击）：强度受辅助设置里的"屏幕震动"与"减少动效"控制
 func shake(amount: float) -> void:
-	_shake_amt = clampf(_shake_amt + amount, 0.0, 1.2)
+	var k: float = Settings.get_float("accessibility", "screen_shake")
+	if Settings.get_bool("accessibility", "reduce_motion"):
+		k = 0.0
+	_shake_amt = clampf(_shake_amt + amount * k, 0.0, 1.2)
+
+
+## 应用辅助功能设置：准星样式/颜色、大字号、色盲配色
+func apply_accessibility() -> void:
+	if _root == null:
+		return
+	if _crosshair != null:
+		_crosshair.apply_settings()
+	var cb: int = Settings.get_int("accessibility", "colorblind")
+	if _hp_bar != null:
+		_hp_bar.color = Color("ffd83d") if cb > 0 else HP_HIGH
+	if _score_ct != null:
+		_score_ct.add_theme_color_override("font_color", Color("4fd7ff") if cb > 0 else CT_COLOR)
+	if _score_t != null:
+		_score_t.add_theme_color_override("font_color", Color("ffd83d") if cb > 0 else T_COLOR)
+	_apply_large_text(_root, Settings.get_bool("accessibility", "large_text"))
+
+
+func _apply_large_text(n: Node, on: bool) -> void:
+	for c in n.get_children():
+		if c is Label:
+			var l: Label = c
+			if not l.has_meta("base_fs"):
+				l.set_meta("base_fs", l.get_theme_font_size("font_size"))
+			var base: int = int(l.get_meta("base_fs"))
+			if base <= 0:
+				base = 16
+			l.add_theme_font_size_override("font_size", int(round(base * 1.18)) if on else base)
+		_apply_large_text(c, on)
+
+
+## 命中伤害数字：从准星位置向上飘并淡出
+func show_damage_number(amount: int, headshot: bool) -> void:
+	if _root == null or not Settings.get_bool("gameplay", "damage_numbers"):
+		return
+	var vs: Vector2 = get_viewport().get_visible_rect().size
+	var l := Label.new()
+	l.text = ("%d" % amount) + (" 爆头" if headshot else "")
+	l.add_theme_font_size_override("font_size", 30 if headshot else 22)
+	l.add_theme_color_override("font_color", Color("ffd83d") if headshot else Color(1, 1, 1))
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	l.add_theme_constant_override("outline_size", 4)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.position = Vector2(vs.x * 0.5 + randf_range(-46.0, 46.0), vs.y * 0.5 - 54.0)
+	_root.add_child(l)
+	var tw := create_tween()
+	tw.tween_property(l, "position:y", l.position.y - 52.0, 0.7)
+	tw.parallel().tween_property(l, "modulate:a", 0.0, 0.55).set_delay(0.2)
+	tw.chain().tween_callback(l.queue_free)
 
 
 ## 移动端：整体缩放，保证小屏可读
@@ -655,6 +708,9 @@ func on_hit_marker() -> void:
 
 func show_message(text: String, duration: float) -> void:
 	if _msg_label == null:
+		return
+	# 关闭"播报字幕"后只保留常驻/关键提示（duration 很大的是回合状态）
+	if not Settings.get_bool("gameplay", "subtitles") and duration > 0.0 and duration < 8.0:
 		return
 	if text == "" or duration <= 0.0:
 		_msg_label.text = ""

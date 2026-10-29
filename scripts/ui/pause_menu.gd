@@ -4,12 +4,15 @@ extends CanvasLayer
 
 signal resume_requested
 signal menu_requested
+signal settings_requested
 signal quit_requested
 
 var _root: Control
 
 
 func _ready() -> void:
+	layer = 30
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_root)
@@ -25,7 +28,7 @@ func _ready() -> void:
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	panel.custom_minimum_size = Vector2(340, 300)
+	panel.custom_minimum_size = Vector2(380, 340)
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color(0.06, 0.08, 0.11, 0.96)
 	psb.border_color = Color(1, 1, 1, 0.18)
@@ -43,7 +46,7 @@ func _ready() -> void:
 	panel.add_child(vl)
 
 	var title := Label.new()
-	title.text = "PAUSED"
+	title.text = "已暂停"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 34)
 	title.add_theme_color_override("font_color", Color(1, 1, 1))
@@ -51,9 +54,10 @@ func _ready() -> void:
 	title.add_theme_constant_override("outline_size", 6)
 	vl.add_child(title)
 
-	vl.add_child(_btn("RESUME", resume_requested))
-	vl.add_child(_btn("BACK TO MENU", menu_requested))
-	vl.add_child(_btn("QUIT", quit_requested))
+	vl.add_child(_btn("继续游戏", resume_requested))
+	vl.add_child(_btn("设置", settings_requested))
+	vl.add_child(_btn("返回主菜单", menu_requested))
+	vl.add_child(_btn("退出游戏", quit_requested))
 
 
 func _btn(text: String, sig: Signal) -> Button:

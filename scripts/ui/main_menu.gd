@@ -5,11 +5,11 @@ extends CanvasLayer
 
 signal start_requested(opts: Dictionary)
 signal net_requested()
+signal settings_requested()
 signal quit_requested
 signal settings_changed(settings: Dictionary)
 
 const ACCENT := Color("ff8b3d")
-const SETTINGS_PATH := "user://settings.cfg"
 
 var _root: Control
 var _mode_buttons: Array = []
@@ -22,18 +22,12 @@ var _bots_value: Label
 var _mode: String = "defusal"
 var _map_id: String = "vertex"
 var _team_pref: String = "random"
-
-var _settings_panel: Control = null
-var _settings: Dictionary = {"fov": 74.0, "volume": 1.0, "bgm": true}
-var _fov_slider: HSlider = null
-var _vol_slider: HSlider = null
-var _bgm_check: CheckButton = null
-var _fov_value: Label = null
-var _vol_value: Label = null
+var _scroll: ScrollContainer = null
 
 
 func _ready() -> void:
-	_load_settings()
+	layer = 34
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_root)
@@ -59,17 +53,21 @@ func _ready() -> void:
 	bg.texture = tex
 	_root.add_child(bg)
 
+	# 手机竖屏/小屏也能完整操作：整页可滚动，内容居中
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	_root.add_child(scroll)
+	_scroll = scroll
+	var wrap := CenterContainer.new()
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrap.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(wrap)
 	var center := VBoxContainer.new()
-	center.set_anchors_preset(Control.PRESET_CENTER)
-	center.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	center.grow_vertical = Control.GROW_DIRECTION_BOTH
-	center.custom_minimum_size = Vector2(760, 640)
-	center.offset_left = -380
-	center.offset_top = -320
-	center.offset_right = 380
-	center.offset_bottom = 320
-	center.add_theme_constant_override("separation", 14)
-	_root.add_child(center)
+	center.custom_minimum_size = Vector2(760, 0)
+	center.add_theme_constant_override("separation", 12)
+	wrap.add_child(center)
 
 	var title_row := HBoxContainer.new()
 	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -94,7 +92,8 @@ func _ready() -> void:
 	center.add_child(mode_row)
 	_build_mode_buttons(mode_row)
 
-	_mk_label("选择地图", 15, Color(0.7, 0.74, 0.82), center)
+	var map_cap := _mk_label("选择地图", 15, Color(0.7, 0.74, 0.82), center)
+	map_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 	var map_row := HBoxContainer.new()
 	map_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -123,6 +122,7 @@ func _ready() -> void:
 	lesb_f.border_color = Color(ACCENT, 0.8)
 	_name_edit.add_theme_stylebox_override("focus", lesb_f)
 	name_row.add_child(_name_edit)
+	_load_settings()
 
 	var bot_row := HBoxContainer.new()
 	bot_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -164,8 +164,8 @@ func _ready() -> void:
 	action_row.add_child(net_btn)
 
 	var settings_btn := _make_ghost_button("设置")
-	settings_btn.custom_minimum_size = Vector2(300, 40)
-	settings_btn.pressed.connect(_show_settings)
+	settings_btn.custom_minimum_size = Vector2(300, 44)
+	settings_btn.pressed.connect(func(): settings_requested.emit())
 	center.add_child(settings_btn)
 
 	var quit_btn := _make_ghost_button("退出")
@@ -173,176 +173,48 @@ func _ready() -> void:
 	quit_btn.pressed.connect(func(): quit_requested.emit())
 	center.add_child(quit_btn)
 
-	_build_settings_panel()
-
 
 func show_menu() -> void:
 	if _root != null:
 		_root.visible = true
-	_hide_settings()
+		if _scroll != null:
+			_scroll.scroll_vertical = 0
 
 
 func hide_menu() -> void:
 	if _root != null:
 		_root.visible = false
-	_hide_settings()
 
 
 func _on_start() -> void:
-	_save_settings()
+	var pname: String = _name_edit.text.strip_edges()
+	if pname == "":
+		pname = "Player1"
+	Settings.set_value("gameplay", "player_name", pname)
+	Settings.flush()
 	start_requested.emit({
 		"mode": _mode,
 		"mapId": _map_id,
 		"botCount": int(_bots_slider.value),
-		"playerName": _name_edit.text.strip_edges() if _name_edit.text.strip_edges() != "" else "Player1",
+		"playerName": pname,
 		"teamPref": _team_pref,
 	})
 
 
+## 兼容旧调用：返回设置快照（v2 已改为全局 Settings，fov/volume/bgm 仍然给 game 兜底）
 func get_settings() -> Dictionary:
-	return _settings.duplicate()
+	return {
+		"fov": Settings.get_float("graphics", "fov"),
+		"volume": Settings.get_float("audio", "master"),
+		"bgm": Settings.get_float("audio", "music") > 0.001,
+	}
 
 
 func _load_settings() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load(SETTINGS_PATH) == OK:
-		_settings.fov = clampf(cfg.get_value("game", "fov", 74.0), 70.0, 110.0)
-		_settings.volume = clampf(cfg.get_value("game", "volume", 1.0), 0.0, 1.0)
-		_settings.bgm = bool(cfg.get_value("game", "bgm", true))
-	else:
-		_settings = {"fov": 74.0, "volume": 1.0, "bgm": true}
-
-
-func _save_settings() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("game", "fov", _settings.fov)
-	cfg.set_value("game", "volume", _settings.volume)
-	cfg.set_value("game", "bgm", _settings.bgm)
-	cfg.save(SETTINGS_PATH)
-
-
-func _show_settings() -> void:
-	if _settings_panel != null:
-		_settings_panel.visible = true
-		_fov_slider.value = _settings.fov
-		_vol_slider.value = _settings.volume
-		_bgm_check.button_pressed = _settings.bgm
-		_fov_value.text = str(int(_settings.fov))
-		_vol_value.text = "%d%%" % int(_settings.volume * 100.0)
-
-
-func _hide_settings() -> void:
-	if _settings_panel != null:
-		_settings_panel.visible = false
-
-
-func _build_settings_panel() -> void:
-	_settings_panel = Control.new()
-	_settings_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_settings_panel.visible = false
-	_settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(_settings_panel)
-
-	var dim := ColorRect.new()
-	dim.color = Color(0.0, 0.0, 0.0, 0.65)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_settings_panel.add_child(dim)
-
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	panel.custom_minimum_size = Vector2(420, 360)
-	var psb := StyleBoxFlat.new()
-	psb.bg_color = Color(0.06, 0.08, 0.11, 0.96)
-	psb.border_color = Color(1, 1, 1, 0.18)
-	psb.set_border_width_all(1)
-	psb.set_corner_radius_all(12)
-	psb.content_margin_left = 28
-	psb.content_margin_right = 28
-	psb.content_margin_top = 24
-	psb.content_margin_bottom = 24
-	panel.add_theme_stylebox_override("panel", psb)
-	_settings_panel.add_child(panel)
-
-	var vl := VBoxContainer.new()
-	vl.add_theme_constant_override("separation", 14)
-	panel.add_child(vl)
-
-	var title := Label.new()
-	title.text = "设置"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_color", Color(1, 1, 1))
-	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	title.add_theme_constant_override("outline_size", 6)
-	vl.add_child(title)
-
-	vl.add_child(_make_slider_row("FOV", 70, 110, _settings.fov, func(v: float):
-		_settings.fov = v
-		_fov_value.text = str(int(v))
-		settings_changed.emit(_settings.duplicate())
-	))
-	_fov_slider = _last_slider()
-	_fov_value = _last_value_label()
-
-	vl.add_child(_make_slider_row("主音量", 0, 100, int(_settings.volume * 100.0), func(v: float):
-		_settings.volume = v / 100.0
-		_vol_value.text = "%d%%" % int(v)
-		settings_changed.emit(_settings.duplicate())
-	))
-	_vol_slider = _last_slider()
-	_vol_value = _last_value_label()
-
-	var bgm_row := HBoxContainer.new()
-	bgm_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	bgm_row.add_theme_constant_override("separation", 12)
-	vl.add_child(bgm_row)
-	_mk_label("背景音乐", 16, Color(0.8, 0.83, 0.9), bgm_row)
-	_bgm_check = CheckButton.new()
-	_bgm_check.button_pressed = _settings.bgm
-	_bgm_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.96))
-	_bgm_check.toggled.connect(func(on: bool):
-		_settings.bgm = on
-		settings_changed.emit(_settings.duplicate())
-	)
-	bgm_row.add_child(_bgm_check)
-
-	var close_btn := _make_ghost_button("关闭")
-	close_btn.custom_minimum_size = Vector2(0, 44)
-	close_btn.pressed.connect(_hide_settings)
-	vl.add_child(close_btn)
-
-
-var _last_slider_ref: HSlider = null
-var _last_value_label_ref: Label = null
-
-
-func _make_slider_row(label: String, min_v: int, max_v: int, value: float, changed: Callable) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 10)
-	_mk_label(label, 16, Color(0.8, 0.83, 0.9), row)
-	var slider := HSlider.new()
-	slider.min_value = min_v
-	slider.max_value = max_v
-	slider.step = 1
-	slider.value = value
-	slider.custom_minimum_size = Vector2(180, 28)
-	slider.value_changed.connect(changed)
-	row.add_child(slider)
-	_last_slider_ref = slider
-	var val := _mk_label(str(int(value)), 16, ACCENT, row)
-	_last_value_label_ref = val
-	return row
-
-
-func _last_slider() -> HSlider:
-	return _last_slider_ref
-
-
-func _last_value_label() -> Label:
-	return _last_value_label_ref
+	var pname: String = Settings.get_str("gameplay", "player_name")
+	if pname == "":
+		pname = "Player1"
+	_name_edit.text = pname
 
 
 # ---------- 构建 ----------
@@ -459,7 +331,12 @@ func _make_map_card(id: String, name: String, c1: Color, c2: Color, parent: Node
 	sel_tag.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	sel_tag.add_theme_constant_override("outline_size", 3)
 	sel_tag.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	sel_tag.position = Vector2(-8, 4)
+	# 锚点右对齐后用 offset 定位，直接用 position 会被锚点重置
+	sel_tag.offset_left = -86.0
+	sel_tag.offset_top = 6.0
+	sel_tag.offset_right = -6.0
+	sel_tag.offset_bottom = 28.0
+	sel_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	sel_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	sel_tag.visible = false
 	card.add_child(sel_tag)

@@ -206,3 +206,37 @@ func _ready() -> void:
 	fill.light_energy = float(th.fill_energy) * (1.2 if compat else 1.0)
 	fill.shadow_enabled = false
 	add_child(fill)
+
+
+## 应用用户设置（画面段）。地图重建后也要调用一次。
+## 画质档位是"上限"，用户开关是"下限"：两者都满足才开启，避免低端机被强行拉满。
+func apply_user_settings() -> void:
+	if env == null:
+		return
+	var tier: int = Platform.tier
+	var cb: int = Settings.get_int("accessibility", "colorblind")
+	var reduce_motion: bool = Settings.get_bool("accessibility", "reduce_motion")
+
+	env.ssao_enabled = Settings.get_bool("graphics", "ssao") and tier >= Platform.Tier.MEDIUM
+	env.ssr_enabled = Settings.get_bool("graphics", "ssr") and tier >= Platform.Tier.MEDIUM and not Platform.is_web
+	var want_vol: bool = Settings.get_bool("graphics", "volumetric_fog")
+	var vol_strength: float = float(theme.get("volumetric", 0.0))
+	env.volumetric_fog_enabled = want_vol and vol_strength > 0.0 and tier >= Platform.Tier.HIGH and not reduce_motion
+
+	var bloom: float = Settings.get_float("graphics", "bloom")
+	env.glow_enabled = bloom > 0.01 and tier >= Platform.Tier.LOW
+	env.glow_intensity = float(theme.get("glow_intensity", 0.9)) * bloom
+	env.glow_bloom = 0.25 * bloom
+	if reduce_motion:
+		env.glow_bloom = 0.0
+
+	# 色盲：降低饱和度让红绿差更明显，HUD 侧再替换具体颜色
+	env.adjustment_enabled = true
+	env.adjustment_saturation = float(theme.get("saturation", 1.06)) * (0.72 if cb > 0 else 1.0)
+	env.adjustment_contrast = float(theme.get("contrast", 1.04)) * (1.08 if cb > 0 else 1.0)
+
+	# 低画质：关掉 SDFGI 省一大块 GPU（否则 4 级联体素 GI 在中端机上就是灾难）
+	if tier <= Platform.Tier.LOW:
+		env.sdfgi_enabled = false
+		env.ssao_enabled = false
+		env.ssr_enabled = false

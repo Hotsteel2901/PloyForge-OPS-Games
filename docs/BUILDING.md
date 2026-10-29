@@ -41,6 +41,15 @@ build/
    `项目 → 导出 → Android → 密钥库` 里配置自己的 keystore。
 4. 包名 `com.polyforge.ops`，minSdk 24，targetSdk 35，仅 arm64-v8a（体积最小）。
 
+### 移动端输入与显示
+
+- 触控 UI 层级：世界 → HUD(10) → 触控(20) → 暂停/购买(30) → 计分(32) → 主菜单(34) → 联机(36) → 设置(40)。
+- `project.godot` 已启用 `stretch/mode=canvas_items` + `aspect=expand`，配合
+  `Platform.apply_ui_scale()` 在手机上自动放大 UI（可于设置 → 画面调整）。
+- 触屏设备关闭鼠标模拟（`emulate_mouse_from_touch=false`），键盘与触屏输入分层合并互不覆盖；
+  开镜/冲刺支持"切换"模式，陀螺仪与辅助瞄准可在设置 → 操作中开关。
+- 设置中心由 `Settings.SCHEMA` 驱动自动生成（6 类 56 项），改动即时生效，支持导入/导出配置。
+
 ## 专用服务器
 
 ```bash

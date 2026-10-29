@@ -23,6 +23,7 @@ var last_error: String = ""
 var _opts: Dictionary = {}
 var _http: HTTPRequest = null
 var _lan_timer: float = 0.0
+var _ping_warned: bool = false
 
 
 func _ready() -> void:
@@ -43,6 +44,7 @@ func _process(delta: float) -> void:
 			if client != null:
 				client.poll(delta)
 				client.interpolate(delta)
+				_check_ping()
 		Status.CONNECTING:
 			# 握手阶段也必须轮询，否则 WebSocket 永远停在 CONNECTING
 			if transport != null:
@@ -60,6 +62,20 @@ func _process(delta: float) -> void:
 		if rt._ping_timer >= 2.0:
 			rt._ping_timer = 0.0
 			rt.ping()
+
+
+## 延迟上限警告（network/max_ping）：超过上限只提示一次，避免刷屏
+func _check_ping() -> void:
+	var cap: int = Settings.get_int("network", "max_ping")
+	var ms: int = latency()
+	if cap <= 0 or ms <= 0:
+		return
+	if ms > cap:
+		if not _ping_warned:
+			_ping_warned = true
+			error_occurred.emit("当前延迟 %dms 已超过上限 %dms" % [ms, cap])
+	else:
+		_ping_warned = false
 
 
 # ---------------- 查询 ----------------
@@ -177,8 +193,27 @@ func join(url_or_code: String, opts: Dictionary) -> bool:
 			return false
 		relay_url = target
 	else:
-		# 纯房间码 → 用当前中继
+		# 纯房间码 → 优先局域网直连（P2P），失败再走中继
 		if target.length() <= 8 and not target.contains(".") and not target.contains(":"):
+			if Settings.get_bool("network", "prefer_p2p"):
+				var lan_ip: String = _find_lan_host(target)
+				if lan_ip != "":
+					var pu: String = "ws://%s:%d/ws?room=%s&role=client&name=%s&v=%d" % [
+						lan_ip, NetProtocol.PORT, target, str(opts.get("name", "Player")).uri_encode(), NetProtocol.VERSION]
+					t = RelayTransport.new()
+					if (t as RelayTransport).connect_to(pu, {"room": target, "role": "client", "name": str(opts.get("name", "Player"))}):
+						room_code = target
+						transport = t
+						client = NetClient.new()
+						add_child(client)
+						client.kicked.connect(_on_kicked)
+						client.joined.connect(func(id, info):
+							_set_status(Status.CLIENT, "已连接（局域网直连）")
+							joined_game.emit()
+						)
+						client.start(t, opts)
+						_set_status(Status.CONNECTING, "局域网直连中…")
+						return true
 			t = RelayTransport.new()
 			if not (t as RelayTransport).connect_to(relay_url, {"room": target, "role": "client", "name": str(opts.get("name", "Player"))}):
 				last_error = t.last_error
@@ -209,6 +244,27 @@ func join(url_or_code: String, opts: Dictionary) -> bool:
 	client.start(t, opts)
 	_set_status(Status.CONNECTING, "连接中…")
 	return true
+
+
+## 局域网里找同房间号的 host（P2P 优先用）
+func _find_lan_host(code: String) -> String:
+	if lan == null:
+		return ""
+	for r in lan.rooms():
+		if str(r.get("room", "")) == code and str(r.get("ip", "")) != "":
+			return str(r.get("ip"))
+	return ""
+
+
+## 设置变更后重读网络参数（中继地址 / 局域网发现开关）
+func reload_settings() -> void:
+	var url: String = Settings.get_str("network", "relay_url")
+	relay_url = url if url != "" else "ws://127.0.0.1:8080"
+	if Settings.get_bool("network", "lan_discovery"):
+		if lan != null and status == Status.OFFLINE:
+			lan.start_listen()
+	elif lan != null:
+		lan.stop()
 
 
 func leave() -> void:

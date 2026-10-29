@@ -233,6 +233,29 @@ func wants_touch_ui() -> bool:
 	return false
 
 
+## UI 基准缩放：canvas_items + expand 已经按 1080p 等比缩放，
+## 但手机屏幕物理尺寸小、握持距离近，仍需要再放大一档才看得清。
+## mult 来自用户设置 graphics/hud_scale（0.7~1.6）。
+func apply_ui_scale(mult: float = 1.0) -> void:
+	if not is_inside_tree():
+		return
+	var base: float = 1.0
+	if is_mobile:
+		# 6.7" 2400x1080 上 1.35 倍后逻辑分辨率约 1778x800，UI 元素接近桌面观感
+		base = 1.35
+	elif is_web and OS.has_feature("web_android"):
+		base = 1.25
+	var f: float = clampf(base * mult, 0.7, 2.2)
+	get_window().content_scale_factor = f
+
+
+## 触摸输入是否为主输入（决定是否忽略鼠标事件、是否启用虚拟手柄）
+func is_touch_device() -> bool:
+	if is_touch_primary:
+		return true
+	return DisplayServer.is_touchscreen_available()
+
+
 func _ps(key: String, value: Variant) -> void:
 	# 直接改 ProjectSettings 对已初始化的渲染后端无效，这里仅记录；
 	# 真正的运行时切换由各系统（Environment / 光影）读取 Platform.tier 完成。

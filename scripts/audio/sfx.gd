@@ -201,7 +201,16 @@ func boost() -> void:
 	_play(_get_stream("boost"))
 
 
-# 简易 2D 定位：按距离衰减音量
+## 3D 音效定位（audio/hrtf）：开启时用平方衰减（近距离更清晰、远处更快消失），
+## 关闭时用线性衰减，听感更平、但能听清更远的脚步。
+var hrtf: bool = true
+
+
+func set_hrtf(on: bool) -> void:
+	hrtf = on
+
+
+# 简易 3D 定位：按距离衰减音量
 func play_at(stream: AudioStreamWAV, global_pos: Vector3, cam_pos: Vector3, max_dist: float = 30.0) -> void:
 	if stream == null:
 		return
@@ -209,7 +218,9 @@ func play_at(stream: AudioStreamWAV, global_pos: Vector3, cam_pos: Vector3, max_
 	if d >= max_dist:
 		return
 	var v: float = 1.0 - d / max_dist
-	_play(stream, linear_to_db(v * v), 1.0)
+	# 平方衰减更接近真实声压衰减；线性衰减保留远处细节
+	var atten: float = v * v if hrtf else v
+	_play(stream, linear_to_db(maxf(0.0001, atten)), 1.0)
 
 
 # ---------- 内部 ----------

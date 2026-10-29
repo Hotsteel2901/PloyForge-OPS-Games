@@ -24,6 +24,8 @@ var _cards: Dictionary = {}
 
 
 func _ready() -> void:
+	layer = 30
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_STOP

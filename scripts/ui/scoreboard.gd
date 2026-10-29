@@ -21,6 +21,7 @@ var _cache_key: String = ""
 
 
 func _ready() -> void:
+	layer = 32
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_STOP
